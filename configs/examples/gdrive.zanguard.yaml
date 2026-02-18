@@ -1,0 +1,64 @@
+version: "1.0"
+
+types:
+  user:
+    attributes:
+      clearance_level: int
+      department: string
+      region: string
+
+  group:
+    relations:
+      member:
+        types: [user]
+      admin:
+        types: [user]
+    permissions:
+      manage:
+        resolve: admin
+
+  folder:
+    relations:
+      owner:
+        types: [user]
+      viewer:
+        types: [user, group#member]
+      parent:
+        types: [folder]
+    permissions:
+      view:
+        union:
+          - viewer
+          - owner
+          - parent->view
+      edit:
+        resolve: owner
+
+  document:
+    attributes:
+      classification: string
+      department: string
+    relations:
+      owner:
+        types: [user]
+      editor:
+        types: [user, group#member]
+      viewer:
+        types: [user, group#member]
+      parent:
+        types: [folder]
+    permissions:
+      view:
+        union:
+          - viewer
+          - editor
+          - owner
+          - parent->view
+      edit:
+        union:
+          - editor
+          - owner
+      delete:
+        resolve: owner
+      share:
+        resolve: owner
