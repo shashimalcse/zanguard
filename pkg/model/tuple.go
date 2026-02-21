@@ -17,6 +17,7 @@ type RelationTuple struct {
 	SubjectRelation string         `json:"subject_relation,omitempty"`
 	SubjectTenantID string         `json:"subject_tenant_id,omitempty"`
 	Attributes      map[string]any `json:"attributes,omitempty"`
+	ExpiresAt       *time.Time     `json:"expires_at,omitempty"`
 	CreatedAt       time.Time      `json:"created_at"`
 	UpdatedAt       time.Time      `json:"updated_at"`
 	SourceSystem    string         `json:"source_system,omitempty"`
@@ -69,12 +70,13 @@ type TupleFilter struct {
 	SubjectType     string
 	SubjectID       string
 	SubjectRelation string
+	IncludeExpired  bool
 }
 
 // TenantFilter is used to query tenants.
 type TenantFilter struct {
-	Status    TenantStatus
-	ParentID  string
-	Limit     int
-	Offset    int
+	Status   TenantStatus
+	ParentID string
+	Limit    int
+	Offset   int
 }

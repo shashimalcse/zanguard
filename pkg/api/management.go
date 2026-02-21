@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"zanguard/pkg/model"
 	"zanguard/pkg/schema"
@@ -277,8 +278,13 @@ func (s *Server) handleWriteTuple(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	tuple, err := tupleFromWriteRequest(req, time.Now().UTC())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
-	if err := s.store.WriteTuple(tCtx, tupleFromRequest(req)); err != nil {
+	if err := s.store.WriteTuple(tCtx, tuple); err != nil {
 		writeError(w, errStatus(err), err.Error())
 		return
 	}
@@ -304,12 +310,18 @@ func (s *Server) handleWriteTuples(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tuples := make([]*model.RelationTuple, len(req.Tuples))
+	now := time.Now().UTC()
 	for i, t := range req.Tuples {
 		if err := validateTupleRequest(t); err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("tuples[%d]: %v", i, err))
 			return
 		}
-		tuples[i] = tupleFromRequest(t)
+		tuple, err := tupleFromWriteRequest(t, now)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("tuples[%d]: %v", i, err))
+			return
+		}
+		tuples[i] = tuple
 	}
 
 	if err := s.store.WriteTuples(tCtx, tuples); err != nil {
@@ -360,6 +372,14 @@ func (s *Server) handleReadTuples(w http.ResponseWriter, r *http.Request) {
 		SubjectType:     q.Get("subject_type"),
 		SubjectID:       q.Get("subject_id"),
 		SubjectRelation: q.Get("subject_relation"),
+	}
+	if v := q.Get("include_expired"); v != "" {
+		includeExpired, err := strconv.ParseBool(v)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "include_expired must be a boolean")
+			return
+		}
+		filter.IncludeExpired = includeExpired
 	}
 
 	tuples, err := s.store.ReadTuples(tCtx, filter)

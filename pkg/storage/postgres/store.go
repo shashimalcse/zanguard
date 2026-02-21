@@ -129,6 +129,44 @@ func isUniqueViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
+func marshalTupleAttributes(attrs map[string]any) ([]byte, error) {
+	if attrs == nil {
+		return []byte("{}"), nil
+	}
+	return json.Marshal(attrs)
+}
+
+func (s *Store) refreshExpiredTupleTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantID string,
+	tuple *model.RelationTuple,
+	attrsJSON []byte,
+) (bool, error) {
+	tag, err := tx.Exec(ctx, `
+		UPDATE relation_tuples
+		SET subject_tenant_id=NULLIF($8,''),
+		    source_system=NULLIF($9,''),
+		    external_id=NULLIF($10,''),
+		    expires_at=$11,
+		    attributes=$12,
+		    updated_at=NOW()
+		WHERE tenant_id=$1 AND object_type=$2 AND object_id=$3 AND relation=$4
+		  AND subject_type=$5 AND subject_id=$6 AND COALESCE(subject_relation,'')=$7
+		  AND deleted_at IS NULL
+		  AND expires_at IS NOT NULL
+		  AND expires_at <= NOW()`,
+		tenantID, tuple.ObjectType, tuple.ObjectID, tuple.Relation,
+		tuple.SubjectType, tuple.SubjectID, tuple.SubjectRelation,
+		tuple.SubjectTenantID, tuple.SourceSystem, tuple.ExternalID,
+		tuple.ExpiresAt, attrsJSON,
+	)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // -- Tenant management --
 
 func (s *Store) CreateTenant(ctx context.Context, tenant *model.Tenant) error {
@@ -260,20 +298,33 @@ func (s *Store) WriteTuple(ctx context.Context, tuple *model.RelationTuple) erro
 	}
 	defer tx.Rollback(ctx)
 
+	attrsJSON, err := marshalTupleAttributes(tuple.Attributes)
+	if err != nil {
+		return err
+	}
+
 	_, err = tx.Exec(ctx, `
 		INSERT INTO relation_tuples
 		  (tenant_id, object_type, object_id, relation, subject_type, subject_id, subject_relation,
-		   subject_tenant_id, source_system, external_id)
-		VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7,''),NULLIF($8,''),NULLIF($9,''),NULLIF($10,''))`,
+		   subject_tenant_id, source_system, external_id, expires_at, attributes)
+		VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7,''),NULLIF($8,''),NULLIF($9,''),NULLIF($10,''),$11,$12)`,
 		tenantID, tuple.ObjectType, tuple.ObjectID, tuple.Relation,
 		tuple.SubjectType, tuple.SubjectID, tuple.SubjectRelation,
 		tuple.SubjectTenantID, tuple.SourceSystem, tuple.ExternalID,
+		tuple.ExpiresAt, attrsJSON,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
-			return storage.ErrDuplicateTuple
+			refreshed, refreshErr := s.refreshExpiredTupleTx(ctx, tx, tenantID, tuple, attrsJSON)
+			if refreshErr != nil {
+				return refreshErr
+			}
+			if !refreshed {
+				return storage.ErrDuplicateTuple
+			}
+		} else {
+			return err
 		}
-		return err
 	}
 
 	if err := s.appendChangelogTx(ctx, tx, tenantID, &model.ChangelogEntry{
@@ -311,20 +362,33 @@ func (s *Store) WriteTuples(ctx context.Context, tuples []*model.RelationTuple) 
 	defer tx.Rollback(ctx)
 
 	for _, tuple := range tuples {
-		_, err := tx.Exec(ctx, `
+		attrsJSON, err := marshalTupleAttributes(tuple.Attributes)
+		if err != nil {
+			return err
+		}
+
+		_, err = tx.Exec(ctx, `
 			INSERT INTO relation_tuples
 			  (tenant_id, object_type, object_id, relation, subject_type, subject_id, subject_relation,
-			   subject_tenant_id, source_system, external_id)
-			VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7,''),NULLIF($8,''),NULLIF($9,''),NULLIF($10,''))`,
+			   subject_tenant_id, source_system, external_id, expires_at, attributes)
+			VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7,''),NULLIF($8,''),NULLIF($9,''),NULLIF($10,''),$11,$12)`,
 			tenantID, tuple.ObjectType, tuple.ObjectID, tuple.Relation,
 			tuple.SubjectType, tuple.SubjectID, tuple.SubjectRelation,
 			tuple.SubjectTenantID, tuple.SourceSystem, tuple.ExternalID,
+			tuple.ExpiresAt, attrsJSON,
 		)
 		if err != nil {
 			if isUniqueViolation(err) {
-				return storage.ErrDuplicateTuple
+				refreshed, refreshErr := s.refreshExpiredTupleTx(ctx, tx, tenantID, tuple, attrsJSON)
+				if refreshErr != nil {
+					return refreshErr
+				}
+				if !refreshed {
+					return storage.ErrDuplicateTuple
+				}
+			} else {
+				return err
 			}
-			return err
 		}
 		if err := s.appendChangelogTx(ctx, tx, tenantID, &model.ChangelogEntry{
 			Operation: model.ChangeOpInsert,
@@ -406,10 +470,14 @@ func (s *Store) ReadTuples(ctx context.Context, filter *model.TupleFilter) ([]*m
 
 	query := `SELECT tenant_id, object_type, object_id, relation, subject_type, subject_id,
 		COALESCE(subject_relation,''), COALESCE(subject_tenant_id,''),
-		COALESCE(source_system,''), COALESCE(external_id,''), created_at, updated_at
+		COALESCE(source_system,''), COALESCE(external_id,''),
+		COALESCE(attributes, '{}'::jsonb), expires_at, created_at, updated_at
 		FROM relation_tuples WHERE tenant_id=$1 AND deleted_at IS NULL`
 	args := []any{tenantID}
 	argN := 2
+	if filter == nil || !filter.IncludeExpired {
+		query += " AND (expires_at IS NULL OR expires_at > NOW())"
+	}
 
 	if filter != nil {
 		if filter.ObjectType != "" {
@@ -452,11 +520,17 @@ func (s *Store) ReadTuples(ctx context.Context, filter *model.TupleFilter) ([]*m
 	var tuples []*model.RelationTuple
 	for rows.Next() {
 		var t model.RelationTuple
+		var attrsJSON []byte
+		var expiresAt *time.Time
 		if err := rows.Scan(&t.TenantID, &t.ObjectType, &t.ObjectID, &t.Relation,
 			&t.SubjectType, &t.SubjectID, &t.SubjectRelation, &t.SubjectTenantID,
-			&t.SourceSystem, &t.ExternalID, &t.CreatedAt, &t.UpdatedAt); err != nil {
+			&t.SourceSystem, &t.ExternalID, &attrsJSON, &expiresAt, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, err
 		}
+		if err := json.Unmarshal(attrsJSON, &t.Attributes); err != nil {
+			return nil, err
+		}
+		t.ExpiresAt = expiresAt
 		tuples = append(tuples, &t)
 	}
 	return tuples, rows.Err()
@@ -477,7 +551,8 @@ func (s *Store) CheckDirect(ctx context.Context, objectType, objectID, relation,
 		SELECT EXISTS(SELECT 1 FROM relation_tuples
 		WHERE tenant_id=$1 AND object_type=$2 AND object_id=$3 AND relation=$4
 		  AND subject_type=$5 AND subject_id=$6 AND (subject_relation IS NULL OR subject_relation='')
-		  AND deleted_at IS NULL)`,
+		  AND deleted_at IS NULL
+		  AND (expires_at IS NULL OR expires_at > NOW()))`,
 		tenantID, objectType, objectID, relation, subjectType, subjectID,
 	).Scan(&exists)
 	return exists, err
@@ -493,7 +568,9 @@ func (s *Store) ListRelatedObjects(ctx context.Context, objectType, objectID, re
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT subject_type, subject_id FROM relation_tuples
-		WHERE tenant_id=$1 AND object_type=$2 AND object_id=$3 AND relation=$4 AND deleted_at IS NULL`,
+		WHERE tenant_id=$1 AND object_type=$2 AND object_id=$3 AND relation=$4
+		  AND deleted_at IS NULL
+		  AND (expires_at IS NULL OR expires_at > NOW())`,
 		tenantID, objectType, objectID, relation,
 	)
 	if err != nil {
@@ -522,7 +599,9 @@ func (s *Store) ListSubjects(ctx context.Context, objectType, objectID, relation
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT subject_type, subject_id, COALESCE(subject_relation,'') FROM relation_tuples
-		WHERE tenant_id=$1 AND object_type=$2 AND object_id=$3 AND relation=$4 AND deleted_at IS NULL`,
+		WHERE tenant_id=$1 AND object_type=$2 AND object_id=$3 AND relation=$4
+		  AND deleted_at IS NULL
+		  AND (expires_at IS NULL OR expires_at > NOW())`,
 		tenantID, objectType, objectID, relation,
 	)
 	if err != nil {
@@ -563,7 +642,8 @@ func (s *Store) CheckDirectCrossTenant(ctx context.Context, targetTenantID, obje
 	err := s.pool.QueryRow(ctx, `
 		SELECT EXISTS(SELECT 1 FROM relation_tuples
 		WHERE tenant_id=$1 AND object_type=$2 AND object_id=$3 AND relation=$4
-		  AND subject_type=$5 AND subject_id=$6 AND deleted_at IS NULL)`,
+		  AND subject_type=$5 AND subject_id=$6 AND deleted_at IS NULL
+		  AND (expires_at IS NULL OR expires_at > NOW()))`,
 		targetTenantID, objectType, objectID, relation, subjectType, subjectID,
 	).Scan(&exists)
 	return exists, err
@@ -749,7 +829,11 @@ func (s *Store) CountTuples(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 	var count int64
-	err = s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM relation_tuples WHERE tenant_id=$1 AND deleted_at IS NULL`, tenantID).Scan(&count)
+	err = s.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM relation_tuples
+		WHERE tenant_id=$1 AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())`,
+		tenantID,
+	).Scan(&count)
 	return count, err
 }
 
@@ -787,8 +871,9 @@ func (s *Store) ExportTenantSnapshot(ctx context.Context, w io.Writer) error {
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT tenant_id, object_type, object_id, relation, subject_type, subject_id,
-		  COALESCE(subject_relation,''), created_at, updated_at
-		FROM relation_tuples WHERE tenant_id=$1 AND deleted_at IS NULL`, tenantID)
+		  COALESCE(subject_relation,''), COALESCE(attributes, '{}'::jsonb), expires_at, created_at, updated_at
+		FROM relation_tuples
+		WHERE tenant_id=$1 AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())`, tenantID)
 	if err != nil {
 		return err
 	}
@@ -797,10 +882,16 @@ func (s *Store) ExportTenantSnapshot(ctx context.Context, w io.Writer) error {
 	enc := json.NewEncoder(w)
 	for rows.Next() {
 		var t model.RelationTuple
+		var attrsJSON []byte
+		var expiresAt *time.Time
 		if err := rows.Scan(&t.TenantID, &t.ObjectType, &t.ObjectID, &t.Relation,
-			&t.SubjectType, &t.SubjectID, &t.SubjectRelation, &t.CreatedAt, &t.UpdatedAt); err != nil {
+			&t.SubjectType, &t.SubjectID, &t.SubjectRelation, &attrsJSON, &expiresAt, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			return err
 		}
+		if err := json.Unmarshal(attrsJSON, &t.Attributes); err != nil {
+			return err
+		}
+		t.ExpiresAt = expiresAt
 		if err := enc.Encode(t); err != nil {
 			return err
 		}

@@ -394,6 +394,11 @@ paths:
           name: subject_relation
           schema:
             type: string
+        - in: query
+          name: include_expired
+          schema:
+            type: boolean
+          description: Include expired tuples in results (default `false`)
       responses:
         "200":
           description: Tuples
@@ -906,6 +911,15 @@ components:
           type: string
         subject_relation:
           type: string
+        ttl_seconds:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Time-to-live in seconds (mutually exclusive with `expires_at`)
+        expires_at:
+          type: string
+          format: date-time
+          description: Absolute expiry timestamp in RFC3339 (mutually exclusive with `ttl_seconds`)
         attributes:
           $ref: '#/components/schemas/MapStringAny'
 
@@ -949,6 +963,9 @@ components:
           type: string
         attributes:
           $ref: '#/components/schemas/MapStringAny'
+        expires_at:
+          type: string
+          format: date-time
         created_at:
           type: string
           format: date-time

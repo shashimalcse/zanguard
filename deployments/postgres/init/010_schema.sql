@@ -36,6 +36,8 @@ CREATE TABLE relation_tuples (
     subject_tenant_id VARCHAR(128),
     source_system     VARCHAR(64),
     external_id       VARCHAR(512),
+    attributes        JSONB NOT NULL DEFAULT '{}',
+    expires_at        TIMESTAMPTZ,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at        TIMESTAMPTZ
@@ -47,6 +49,8 @@ CREATE INDEX idx_tuples_subject ON relation_tuples(tenant_id, subject_type, subj
     WHERE deleted_at IS NULL;
 CREATE INDEX idx_tuples_source ON relation_tuples(tenant_id, source_system, external_id)
     WHERE source_system IS NOT NULL;
+CREATE INDEX idx_tuples_expiry_active ON relation_tuples(tenant_id, expires_at)
+    WHERE deleted_at IS NULL AND expires_at IS NOT NULL;
 CREATE UNIQUE INDEX uq_tuples_identity_active ON relation_tuples
     (tenant_id, object_type, object_id, relation, subject_type, subject_id, COALESCE(subject_relation, ''))
     WHERE deleted_at IS NULL;

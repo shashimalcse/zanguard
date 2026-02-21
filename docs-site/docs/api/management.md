@@ -424,6 +424,8 @@ Writes a single relation tuple for the tenant.
 | `subject_type` | string | yes | Type of the subject (e.g. `"user"`) |
 | `subject_id` | string | yes | ID of the subject (e.g. `"alice"`) |
 | `subject_relation` | string | no | Subject relation for userset references (e.g. `"member"`) |
+| `ttl_seconds` | integer | no | Relative expiry in seconds (must be > 0, max 86400). Mutually exclusive with `expires_at` |
+| `expires_at` | string | no | Absolute expiry timestamp (RFC3339). Mutually exclusive with `ttl_seconds` |
 | `attributes` | object | no | Arbitrary key-value metadata attached to the tuple |
 
 ```bash
@@ -435,6 +437,21 @@ curl -X POST http://localhost:1997/api/v1/t/acme/tuples \
     "relation": "viewer",
     "subject_type": "user",
     "subject_id": "alice"
+  }'
+```
+
+Time-bound consent grant example (expires after 5 minutes):
+
+```bash
+curl -X POST http://localhost:1997/api/v1/t/acme/tuples \
+  -H "Content-Type: application/json" \
+  -d '{
+    "object_type": "mailbox",
+    "object_id": "alice",
+    "relation": "reader",
+    "subject_type": "agent",
+    "subject_id": "support-bot",
+    "ttl_seconds": 300
   }'
 ```
 
@@ -557,9 +574,16 @@ Reads tuples for the tenant. All query parameters are optional — omitting all 
 | `subject_type` | Filter by subject type |
 | `subject_id` | Filter by subject ID |
 | `subject_relation` | Filter by subject relation (userset references) |
+| `include_expired` | Include expired tuples (`true` or `false`). Default is `false` |
 
 ```bash
 curl "http://localhost:1997/api/v1/t/acme/tuples?object_type=document&object_id=readme"
+```
+
+To inspect expired grants for debugging or audit:
+
+```bash
+curl "http://localhost:1997/api/v1/t/acme/tuples?include_expired=true"
 ```
 
 #### Response — `200 OK`

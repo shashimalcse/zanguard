@@ -41,6 +41,7 @@ type RelationTuple struct {
     SubjectID       string         // e.g. "thilina"
     SubjectRelation string         // optional: e.g. "member" (for usersets)
     Attributes      map[string]any // optional: tuple-level metadata
+    ExpiresAt       *time.Time     // optional: tuple expires at this UTC timestamp
     CreatedAt       time.Time
     UpdatedAt       time.Time
     SourceSystem    string         // optional: external provenance
@@ -144,8 +145,13 @@ type TupleFilter struct {
     SubjectType     string  // filter by subject type
     SubjectID       string  // filter by subject ID
     SubjectRelation string  // filter by subject relation (userset)
+    IncludeExpired  bool    // include expired tuples in results
 }
 ```
+
+## Time-Bound Grants
+
+Use `ExpiresAt` to model consent-style access windows (for example, a 5-minute AI tool grant). Expired tuples stay in storage but are ignored by checks and tuple reads unless `IncludeExpired=true` is explicitly requested.
 
 ## Tenant Isolation
 

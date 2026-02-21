@@ -7,11 +7,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
+	"time"
 
 	"zanguard/pkg/model"
 	"zanguard/pkg/storage"
 	"zanguard/pkg/tenant"
 )
+
+const maxTupleTTLSeconds int64 = 86400
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -89,4 +93,41 @@ func tupleFromRequest(req TupleRequest) *model.RelationTuple {
 		SubjectRelation: req.SubjectRelation,
 		Attributes:      req.Attributes,
 	}
+}
+
+func tupleFromWriteRequest(req TupleRequest, now time.Time) (*model.RelationTuple, error) {
+	tuple := tupleFromRequest(req)
+	expiresAt, err := tupleExpiryFromRequest(req, now)
+	if err != nil {
+		return nil, err
+	}
+	tuple.ExpiresAt = expiresAt
+	return tuple, nil
+}
+
+func tupleExpiryFromRequest(req TupleRequest, now time.Time) (*time.Time, error) {
+	expiresRaw := strings.TrimSpace(req.ExpiresAt)
+	if req.TTLSeconds != nil && expiresRaw != "" {
+		return nil, fmt.Errorf("ttl_seconds and expires_at are mutually exclusive")
+	}
+	if req.TTLSeconds != nil {
+		ttl := *req.TTLSeconds
+		if ttl <= 0 {
+			return nil, fmt.Errorf("ttl_seconds must be greater than 0")
+		}
+		if ttl > maxTupleTTLSeconds {
+			return nil, fmt.Errorf("ttl_seconds must be <= %d", maxTupleTTLSeconds)
+		}
+		expiresAt := now.UTC().Add(time.Duration(ttl) * time.Second)
+		return &expiresAt, nil
+	}
+	if expiresRaw == "" {
+		return nil, nil
+	}
+	expiresAt, err := time.Parse(time.RFC3339, expiresRaw)
+	if err != nil {
+		return nil, fmt.Errorf("expires_at must be RFC3339: %w", err)
+	}
+	expiresUTC := expiresAt.UTC()
+	return &expiresUTC, nil
 }

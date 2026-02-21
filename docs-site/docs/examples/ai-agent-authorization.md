@@ -124,6 +124,26 @@ curl -X POST $BASE/api/v1/t/$TENANT/tuples \
   -d '{"object_type":"ticket","object_id":"t-100","relation":"viewer","subject_type":"agent","subject_id":"triage-bot"}'
 ```
 
+## 3b) Human Consent (5-Minute Temporary Grant)
+
+Use `ttl_seconds` when writing a tuple to create a time-bound permission window.
+
+```bash
+curl -X POST $BASE/api/v1/t/$TENANT/tuples \
+  -H "Content-Type: application/json" \
+  -d '{
+    "object_type":"tool",
+    "object_id":"refund",
+    "relation":"executor",
+    "subject_type":"agent",
+    "subject_id":"temp-agent",
+    "ttl_seconds":300,
+    "attributes":{"consent_id":"consent-2026-0001","approved_by":"user:alice"}
+  }'
+```
+
+The tuple is automatically ignored after 5 minutes.
+
 ## 4) Runtime Check Calls
 
 ### A) `refund-bot` executes refund with approval (expected `true`)

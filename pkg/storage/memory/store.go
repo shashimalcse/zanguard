@@ -201,10 +201,14 @@ func (s *Store) ReadTuples(ctx context.Context, filter *model.TupleFilter) ([]*m
 	}
 
 	var result []*model.RelationTuple
+	now := time.Now().UTC()
+	includeExpired := filter != nil && filter.IncludeExpired
 	for _, t := range s.tuples[tenantID] {
+		if !includeExpired && tupleIsExpiredAt(t, now) {
+			continue
+		}
 		if matchesTupleFilter(t, filter) {
-			cp := *t
-			result = append(result, &cp)
+			result = append(result, cloneTuple(t))
 		}
 	}
 	return result, nil
@@ -225,13 +229,15 @@ func (s *Store) CheckDirect(ctx context.Context, objectType, objectID, relation,
 		return false, err
 	}
 
+	now := time.Now().UTC()
 	for _, t := range s.tuples[tenantID] {
 		if t.ObjectType == objectType &&
 			t.ObjectID == objectID &&
 			t.Relation == relation &&
 			t.SubjectType == subjectType &&
 			t.SubjectID == subjectID &&
-			t.SubjectRelation == "" {
+			t.SubjectRelation == "" &&
+			!tupleIsExpiredAt(t, now) {
 			return true, nil
 		}
 	}
@@ -252,8 +258,10 @@ func (s *Store) ListRelatedObjects(ctx context.Context, objectType, objectID, re
 	}
 
 	var result []*model.ObjectRef
+	now := time.Now().UTC()
 	for _, t := range s.tuples[tenantID] {
-		if t.ObjectType == objectType && t.ObjectID == objectID && t.Relation == relation {
+		if t.ObjectType == objectType && t.ObjectID == objectID && t.Relation == relation &&
+			!tupleIsExpiredAt(t, now) {
 			result = append(result, &model.ObjectRef{
 				Type: t.SubjectType,
 				ID:   t.SubjectID,
@@ -277,8 +285,10 @@ func (s *Store) ListSubjects(ctx context.Context, objectType, objectID, relation
 	}
 
 	var result []*model.SubjectRef
+	now := time.Now().UTC()
 	for _, t := range s.tuples[tenantID] {
-		if t.ObjectType == objectType && t.ObjectID == objectID && t.Relation == relation {
+		if t.ObjectType == objectType && t.ObjectID == objectID && t.Relation == relation &&
+			!tupleIsExpiredAt(t, now) {
 			result = append(result, &model.SubjectRef{
 				Type:     t.SubjectType,
 				ID:       t.SubjectID,
@@ -305,8 +315,10 @@ func (s *Store) Expand(ctx context.Context, objectType, objectID, relation strin
 	root := &model.SubjectTree{
 		Subject: &model.SubjectRef{Type: objectType, ID: objectID, Relation: relation},
 	}
+	now := time.Now().UTC()
 	for _, t := range s.tuples[tenantID] {
-		if t.ObjectType == objectType && t.ObjectID == objectID && t.Relation == relation {
+		if t.ObjectType == objectType && t.ObjectID == objectID && t.Relation == relation &&
+			!tupleIsExpiredAt(t, now) {
 			root.Children = append(root.Children, &model.SubjectTree{
 				Subject: &model.SubjectRef{Type: t.SubjectType, ID: t.SubjectID, Relation: t.SubjectRelation},
 			})
@@ -323,12 +335,14 @@ func (s *Store) CheckDirectCrossTenant(ctx context.Context, targetTenantID, obje
 		return false, err
 	}
 
+	now := time.Now().UTC()
 	for _, t := range s.tuples[targetTenantID] {
 		if t.ObjectType == objectType &&
 			t.ObjectID == objectID &&
 			t.Relation == relation &&
 			t.SubjectType == subjectType &&
-			t.SubjectID == subjectID {
+			t.SubjectID == subjectID &&
+			!tupleIsExpiredAt(t, now) {
 			return true, nil
 		}
 	}
@@ -496,7 +510,14 @@ func (s *Store) CountTuples(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 
-	return int64(len(s.tuples[tenantID])), nil
+	now := time.Now().UTC()
+	var count int64
+	for _, t := range s.tuples[tenantID] {
+		if !tupleIsExpiredAt(t, now) {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func (s *Store) PurgeTenantData(ctx context.Context) error {
@@ -531,7 +552,11 @@ func (s *Store) ExportTenantSnapshot(ctx context.Context, w io.Writer) error {
 	}
 
 	enc := json.NewEncoder(w)
+	now := time.Now().UTC()
 	for _, t := range s.tuples[tenantID] {
+		if tupleIsExpiredAt(t, now) {
+			continue
+		}
 		if err := enc.Encode(t); err != nil {
 			return err
 		}
@@ -547,11 +572,19 @@ func (s *Store) writeTuplesLocked(tenantID string, tuples []*model.RelationTuple
 	}
 
 	existingKeys := make(map[string]struct{}, len(s.tuples[tenantID]))
-	for _, t := range s.tuples[tenantID] {
-		existingKeys[tupleIdentityKey(t)] = struct{}{}
+	expiredIndexes := make(map[string]int)
+	now := time.Now().UTC()
+	for i, t := range s.tuples[tenantID] {
+		key := tupleIdentityKey(t)
+		if tupleIsExpiredAt(t, now) {
+			if _, ok := expiredIndexes[key]; !ok {
+				expiredIndexes[key] = i
+			}
+			continue
+		}
+		existingKeys[key] = struct{}{}
 	}
 	batchKeys := make(map[string]struct{}, len(tuples))
-	now := time.Now().UTC()
 	staged := make([]*model.RelationTuple, len(tuples))
 
 	for i, tuple := range tuples {
@@ -564,16 +597,24 @@ func (s *Store) writeTuplesLocked(tenantID string, tuples []*model.RelationTuple
 		}
 		batchKeys[key] = struct{}{}
 
-		cp := *tuple
+		cp := cloneTuple(tuple)
 		cp.TenantID = tenantID
 		if cp.CreatedAt.IsZero() {
 			cp.CreatedAt = now
 		}
 		cp.UpdatedAt = now
-		staged[i] = &cp
+		staged[i] = cp
 	}
 
-	s.tuples[tenantID] = append(s.tuples[tenantID], staged...)
+	appends := make([]*model.RelationTuple, 0, len(staged))
+	for _, t := range staged {
+		if idx, ok := expiredIndexes[tupleIdentityKey(t)]; ok {
+			s.tuples[tenantID][idx] = t
+			continue
+		}
+		appends = append(appends, t)
+	}
+	s.tuples[tenantID] = append(s.tuples[tenantID], appends...)
 	for _, t := range staged {
 		s.appendTupleChangelogUnsafe(tenantID, model.ChangeOpInsert, t, "api")
 	}
@@ -665,6 +706,31 @@ func matchesTupleFilter(t *model.RelationTuple, f *model.TupleFilter) bool {
 		return false
 	}
 	return true
+}
+
+func tupleIsExpiredAt(t *model.RelationTuple, now time.Time) bool {
+	if t.ExpiresAt == nil {
+		return false
+	}
+	return !t.ExpiresAt.After(now)
+}
+
+func copyTimePtr(src *time.Time) *time.Time {
+	if src == nil {
+		return nil
+	}
+	cp := src.UTC()
+	return &cp
+}
+
+func cloneTuple(src *model.RelationTuple) *model.RelationTuple {
+	if src == nil {
+		return nil
+	}
+	cp := *src
+	cp.Attributes = copyMap(src.Attributes)
+	cp.ExpiresAt = copyTimePtr(src.ExpiresAt)
+	return &cp
 }
 
 func copyMap(src map[string]any) map[string]any {

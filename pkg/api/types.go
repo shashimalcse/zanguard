@@ -37,6 +37,8 @@ type TupleRequest struct {
 	SubjectID       string         `json:"subject_id"`
 	SubjectRelation string         `json:"subject_relation,omitempty"`
 	Attributes      map[string]any `json:"attributes,omitempty"`
+	TTLSeconds      *int64         `json:"ttl_seconds,omitempty"`
+	ExpiresAt       string         `json:"expires_at,omitempty"`
 }
 
 type BatchTuplesRequest struct {
@@ -95,10 +97,10 @@ type AuthZenAction struct {
 
 // AuthZenEvaluationRequest is the AuthZen 1.0 single-evaluation request body.
 type AuthZenEvaluationRequest struct {
-	Subject  AuthZenSubject `json:"subject"`
+	Subject  AuthZenSubject  `json:"subject"`
 	Resource AuthZenResource `json:"resource"`
-	Action   AuthZenAction  `json:"action"`
-	Context  map[string]any `json:"context,omitempty"`
+	Action   AuthZenAction   `json:"action"`
+	Context  map[string]any  `json:"context,omitempty"`
 }
 
 // AuthZenEvaluationResponse is the AuthZen 1.0 response body.

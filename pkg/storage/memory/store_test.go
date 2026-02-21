@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"zanguard/pkg/model"
 	"zanguard/pkg/storage"
@@ -297,4 +298,87 @@ func TestGetAttributesNotFound(t *testing.T) {
 	if _, err := s.GetSubjectAttributes(ctx, "user", "missing"); err != storage.ErrNotFound {
 		t.Fatalf("expected subject attributes ErrNotFound, got %v", err)
 	}
+}
+
+func TestExpiredTuplesHiddenByDefault(t *testing.T) {
+	s, ctx := setupStore(t)
+	now := time.Now().UTC()
+
+	if err := s.WriteTuple(ctx, &model.RelationTuple{
+		ObjectType:  "doc",
+		ObjectID:    "active",
+		Relation:    "viewer",
+		SubjectType: "user",
+		SubjectID:   "alice",
+		ExpiresAt:   ptrTime(now.Add(10 * time.Minute)),
+	}); err != nil {
+		t.Fatalf("WriteTuple active: %v", err)
+	}
+	if err := s.WriteTuple(ctx, &model.RelationTuple{
+		ObjectType:  "doc",
+		ObjectID:    "expired",
+		Relation:    "viewer",
+		SubjectType: "user",
+		SubjectID:   "alice",
+		ExpiresAt:   ptrTime(now.Add(-10 * time.Minute)),
+	}); err != nil {
+		t.Fatalf("WriteTuple expired: %v", err)
+	}
+
+	tuples, err := s.ReadTuples(ctx, &model.TupleFilter{})
+	if err != nil {
+		t.Fatalf("ReadTuples default: %v", err)
+	}
+	if len(tuples) != 1 || tuples[0].ObjectID != "active" {
+		t.Fatalf("expected only active tuple, got %+v", tuples)
+	}
+
+	tuples, err = s.ReadTuples(ctx, &model.TupleFilter{IncludeExpired: true})
+	if err != nil {
+		t.Fatalf("ReadTuples include_expired: %v", err)
+	}
+	if len(tuples) != 2 {
+		t.Fatalf("expected 2 tuples when include_expired=true, got %d", len(tuples))
+	}
+}
+
+func TestRegrantExpiredTupleKey(t *testing.T) {
+	s, ctx := setupStore(t)
+	now := time.Now().UTC()
+
+	tuple := &model.RelationTuple{
+		ObjectType:  "tool",
+		ObjectID:    "refund",
+		Relation:    "executor",
+		SubjectType: "agent",
+		SubjectID:   "bot-1",
+		ExpiresAt:   ptrTime(now.Add(-1 * time.Minute)),
+	}
+	if err := s.WriteTuple(ctx, tuple); err != nil {
+		t.Fatalf("seed expired tuple: %v", err)
+	}
+
+	// Same identity should be accepted once previous tuple is expired.
+	if err := s.WriteTuple(ctx, &model.RelationTuple{
+		ObjectType:  tuple.ObjectType,
+		ObjectID:    tuple.ObjectID,
+		Relation:    tuple.Relation,
+		SubjectType: tuple.SubjectType,
+		SubjectID:   tuple.SubjectID,
+		ExpiresAt:   ptrTime(now.Add(5 * time.Minute)),
+	}); err != nil {
+		t.Fatalf("regrant tuple: %v", err)
+	}
+
+	ok, err := s.CheckDirect(ctx, "tool", "refund", "executor", "agent", "bot-1")
+	if err != nil {
+		t.Fatalf("CheckDirect: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected regranted tuple to be active")
+	}
+}
+
+func ptrTime(v time.Time) *time.Time {
+	return &v
 }
