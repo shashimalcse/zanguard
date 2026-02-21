@@ -74,6 +74,7 @@ const sidebars = {
         'examples/group-membership',
         'examples/abac-clearance',
         'examples/abac-manual-api',
+        'examples/ai-agent-authorization',
       ],
     },
     {
