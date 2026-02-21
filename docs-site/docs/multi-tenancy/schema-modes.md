@@ -6,120 +6,62 @@ sidebar_position: 3
 
 # Schema Modes
 
-A tenant's **schema mode** determines where its authorization schema comes from. ZanGuard supports three modes to balance flexibility with operational simplicity.
+A tenant's `schema_mode` decides how the engine resolves schema for checks.
 
 ## Modes
 
-| Mode | Constant | Description |
-|------|----------|-------------|
-| `own` | `model.SchemaOwn` | Tenant has its own independent schema |
-| `shared` | `model.SchemaShared` | Tenant uses a pre-registered shared schema |
-| `inherited` | `model.SchemaInherited` | Tenant extends a parent schema (Phase 1: same as `own`) |
+| Mode | Current behavior |
+|------|------------------|
+| `own` | Uses schema loaded for that tenant ID |
+| `shared` | Uses `SharedSchemaRef` and engine shared-schema registry |
+| `inherited` | Currently treated like `own` (no parent merge) |
 
-## `own` — Independent Schema
+## `own`
 
-Each tenant has a completely independent schema loaded via `eng.LoadSchema(tenantID, cs)`.
+Fully supported through management API schema upload:
 
-```go
-// Create tenant with its own schema
-mgr.Create(ctx, "acme", "Acme Corp", model.SchemaOwn)
-mgr.Activate(ctx, "acme")
+- `PUT /api/v1/tenants/{tenantID}/schema`
 
-// Load an acme-specific schema
-data, _ := os.ReadFile("schemas/acme.yaml")
-raw, _ := schema.Parse(data)
-cs, _ := schema.Compile(raw, data)
-eng.LoadSchema("acme", cs)
-```
+This compiles schema and registers it for that tenant in engine memory.
 
-**Use when:** Tenants have meaningfully different authorization models (different object types, relations, or permission logic).
+## `shared`
 
-## `shared` — Shared Schema
+Engine behavior:
 
-Multiple tenants share a single compiled schema. The schema is registered once with a reference name.
+- tenant has `schema_mode=shared`
+- engine resolves schema from `sharedSchemas[tenant.SharedSchemaRef]`
 
-```go
-// Create tenants referencing the same schema
-mgr.Create(ctx, "startup-a", "Startup A", model.SchemaShared)
-t := &model.Tenant{
-    ID:              "startup-a",
-    SchemaMode:      model.SchemaShared,
-    SharedSchemaRef: "saas-standard-v1",  // ← reference name
-}
-store.CreateTenant(ctx, t)
+Current limitation:
 
-// Register the shared schema once
-data, _ := os.ReadFile("schemas/saas-standard.yaml")
-raw, _ := schema.Parse(data)
-cs, _ := schema.Compile(raw, data)
-eng.LoadSharedSchema("saas-standard-v1", cs)  // ← registered by ref name
-```
+- Management API does not currently provide an endpoint to register/update shared schemas in `sharedSchemas`
+- `PUT /api/v1/tenants/{tenantID}/schema` loads tenant-local schema (`LoadSchema`), not shared ref schema (`LoadSharedSchema`)
 
-When the engine resolves a tenant with `SchemaShared`, it looks up `SharedSchemaRef` in `sharedSchemas` instead of `schemas`.
+So shared mode currently requires programmatic engine setup.
 
-**Use when:** You have many tenants with identical authorization models (e.g. a SaaS product where all customers use the same object types and permissions).
+## `inherited`
 
-**Benefits:**
-- Schema is compiled once, not N times
-- Schema updates affect all tenants simultaneously
-- Lower memory usage at scale
+Current implementation resolves inherited mode exactly like own mode.
 
-## `inherited` — Extended Schema
+No parent schema merge/override mechanism is active yet.
 
-The `inherited` mode is reserved for tenants that extend a parent tenant's schema with additional types or permissions. In Phase 1, inherited behaves identically to `own` — the tenant's schema is loaded via `eng.LoadSchema(tenantID, cs)`.
+## Practical Guidance (Current)
 
-```go
-mgr.Create(ctx, "acme-eu", "Acme EU", model.SchemaInherited)
-eng.LoadSchema("acme-eu", extendedCompiledSchema)
-```
+- Use `own` for API-driven flows.
+- Use `shared` only if you control service startup code and call `LoadSharedSchema`.
+- Treat `inherited` as own mode for now.
 
-Full inheritance merging (parent schema + overrides) is planned for a future phase.
+## Engine Resolution Logic
 
-**Use when:** You have a hierarchical tenant structure where child tenants share most of the parent's schema but add custom types or rules.
+Current engine logic:
 
-## Setting the Schema Mode
+- `own` -> `schemas[tenantID]`
+- `shared` -> `sharedSchemas[SharedSchemaRef]`
+- `inherited` -> `schemas[tenantID]`
 
-```go
-// Via Manager.Create
-mgr.Create(ctx, "acme", "Acme Corp", model.SchemaOwn)
-
-// Via direct Tenant struct
-t := &model.Tenant{
-    ID:              "startup-x",
-    DisplayName:     "Startup X",
-    Status:          model.TenantPending,
-    SchemaMode:      model.SchemaShared,
-    SharedSchemaRef: "standard-v2",
-}
-store.CreateTenant(ctx, t)
-```
-
-## Engine Schema Resolution
-
-The engine calls `schemaForTenant` before every check to select the right schema:
-
-```go
-// own / inherited → look up schemas[tenantID]
-// shared          → look up sharedSchemas[SharedSchemaRef]
-cs, err := e.schemaForTenant(tc)
-```
-
-If no matching schema is found, the check returns an error immediately.
-
-## Loading Schemas
-
-```go
-// For own/inherited tenants
-eng.LoadSchema("acme", compiledSchema)
-
-// For shared schemas
-eng.LoadSharedSchema("standard-v2", compiledSchema)
-```
-
-Both methods are protected by a `sync.RWMutex` and are safe to call from concurrent goroutines.
+If no schema is found, checks fail.
 
 ## See Also
 
-- [Tenant Lifecycle](./lifecycle) — state machine
-- [Schema Overview](../schema/overview) — writing and compiling schemas
-- [Engine: Check](../engine/check) — how schemas are used during evaluation
+- [Tenant Lifecycle](./lifecycle)
+- [Tenant Context](./context)
+- [Schema Overview](../schema/overview)

@@ -6,62 +6,51 @@ sidebar_position: 1
 
 # Storage
 
-ZanGuard uses a storage abstraction layer internally. The supported runtime backend is PostgreSQL.
+ZanGuard uses a `TupleStore` interface internally. The server runtime uses PostgreSQL.
+
+## Runtime Backend
+
+- Runtime backend: `pkg/storage/postgres`
+- Server startup requires `DATABASE_URL`
+- The in-memory store package exists for internal tests/dev code, not for the default server runtime path
 
 ## The `TupleStore` Interface
 
-All storage operations go through a single interface:
+Core operations are grouped into:
 
-```go
-type TupleStore interface {
-    // Tenant management
-    CreateTenant(ctx, tenant) error
-    GetTenant(ctx, tenantID) (*Tenant, error)
-    UpdateTenant(ctx, tenant) error
-    ListTenants(ctx, filter) ([]*Tenant, error)
+- Tenant management (`CreateTenant`, `GetTenant`, `UpdateTenant`, `ListTenants`)
+- Tuple CRUD (`WriteTuple`, `WriteTuples`, `DeleteTuple`, `ReadTuples`)
+- Engine lookups (`CheckDirect`, `ListSubjects`, `ListRelatedObjects`, `Expand`)
+- Attributes (`Get/SetObjectAttributes`, `Get/SetSubjectAttributes`)
+- Changelog (`AppendChangelog`, `ReadChangelog`, `LatestSequence`)
+- Tenant data operations (`CountTuples`, `PurgeTenantData`, `ExportTenantSnapshot`)
 
-    // Tuple CRUD (tenant-scoped via ctx)
-    WriteTuple(ctx, tuple) error
-    WriteTuples(ctx, tuples) error
-    DeleteTuple(ctx, tuple) error
-    ReadTuples(ctx, filter) ([]*RelationTuple, error)
+## Tenant Scoping Rules
 
-    // Zanzibar lookups
-    CheckDirect(ctx, objectType, objectID, relation, subjectType, subjectID) (bool, error)
-    ListRelatedObjects(ctx, objectType, objectID, relation) ([]*ObjectRef, error)
-    ListSubjects(ctx, objectType, objectID, relation) ([]*SubjectRef, error)
-    Expand(ctx, objectType, objectID, relation) (*SubjectTree, error)
+Tenant-scoped operations derive tenant identity from `context.Context` (`model.TenantFromContext`).
 
-    // Cross-tenant
-    CheckDirectCrossTenant(ctx, targetTenantID, ...) (bool, error)
+- Missing tenant context returns `model.ErrNoTenantContext`
+- Tenant management methods take explicit tenant IDs and do not require tenant context
 
-    // Attributes
-    GetObjectAttributes(ctx, objectType, objectID) (map[string]any, error)
-    SetObjectAttributes(ctx, objectType, objectID, attrs) error
-    GetSubjectAttributes(ctx, subjectType, subjectID) (map[string]any, error)
-    SetSubjectAttributes(ctx, subjectType, subjectID, attrs) error
+## Read/Write State Enforcement
 
-    // Changelog
-    AppendChangelog(ctx, entry) error
-    ReadChangelog(ctx, sinceSeq, limit) ([]*ChangelogEntry, error)
-    LatestSequence(ctx) (uint64, error)
+Store-level enforcement in current implementation:
 
-    // Tenant data
-    CountTuples(ctx) (int64, error)
-    PurgeTenantData(ctx) error
-    ExportTenantSnapshot(ctx, w io.Writer) error
-}
-```
+- Writes require tenant status `active`
+- Reads are allowed for non-deleted tenants (including `pending` and `suspended`)
+- Deleted tenants return `ErrTenantDeleted` or `ErrTenantNotFound` depending on access path
 
-## Backend
+Note: runtime permission checks add stricter rules in the engine (`pending` checks are denied).
 
-| Backend | Package | Use case |
-|---------|---------|---------|
-| PostgreSQL | `pkg/storage/postgres` | Production |
+## Changelog Behavior
+
+- Changelog entries are tenant-filtered on read
+- Sequence values come from one database sequence (`BIGSERIAL`)
+- Within a tenant stream, sequence values are increasing but may have gaps
 
 ## Sentinel Errors
 
-All backends return the same typed errors for consistent error handling:
+The interface exposes shared sentinel errors:
 
 ```go
 var (
@@ -74,66 +63,13 @@ var (
 )
 ```
 
-## Tenant Scoping
+## Current Notes
 
-All data operations (tuple CRUD, attributes, changelog) are **automatically scoped** to the tenant in `ctx`. There is no way to accidentally read or write across tenant boundaries for these operations.
-
-Tenant management operations (CreateTenant, GetTenant, etc.) take an explicit `tenantID` parameter and do not require a tenant context.
-
-## Zanzibar Lookups
-
-Beyond basic CRUD, the store exposes three Zanzibar-specific read methods used by the engine:
-
-### `CheckDirect`
-
-Checks for an exact tuple match (no userset expansion):
-
-```go
-ok, err := store.CheckDirect(ctx,
-    "document", "readme", "viewer", "user", "thilina")
-// true only if: document:readme#viewer@user:thilina exists (with no SubjectRelation)
-```
-
-### `ListSubjects`
-
-Returns all subjects holding a relation on an object, including userset refs:
-
-```go
-subjects, err := store.ListSubjects(ctx, "document", "spec", "viewer")
-// [{Type:"user", ID:"alice"}, {Type:"group", ID:"eng", Relation:"member"}]
-```
-
-### `ListRelatedObjects`
-
-Returns all objects linked via a relation (used for arrow traversal):
-
-```go
-objects, err := store.ListRelatedObjects(ctx, "document", "design", "parent")
-// [{Type:"folder", ID:"root"}]
-```
-
-## Cross-Tenant Lookup
-
-For cross-tenant subject references:
-
-```go
-ok, err := store.CheckDirectCrossTenant(ctx,
-    "other-tenant", "document", "readme", "viewer", "user", "alice")
-```
-
-This bypasses the context tenant and queries the target tenant directly. Only readable tenants can be queried.
-
-## Snapshot Export
-
-Export all tuples for a tenant as newline-delimited JSON:
-
-```go
-var buf bytes.Buffer
-err := store.ExportTenantSnapshot(ctx, &buf)
-// each line is a JSON-encoded RelationTuple
-```
+- `CheckDirectCrossTenant` exists in the storage interface for internal/service use.
+- The exposed HTTP APIs do not provide cross-tenant tuple read endpoints.
+- Tenant config fields are persisted and carried in tenant context; not all fields are actively enforced by runtime paths yet.
 
 ## See Also
 
-- [PostgreSQL Store](./postgresql) — production setup
-- [Changelog](./changelog) — audit log details
+- [PostgreSQL Store](./postgresql)
+- [Changelog](./changelog)

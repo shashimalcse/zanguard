@@ -73,6 +73,7 @@ const sidebars = {
         'examples/google-drive',
         'examples/group-membership',
         'examples/abac-clearance',
+        'examples/abac-manual-api',
       ],
     },
     {

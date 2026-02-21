@@ -6,30 +6,34 @@ sidebar_position: 1
 
 # Multi-Tenancy
 
-ZanGuard is built for multi-tenant SaaS from the ground up. Every tuple, attribute, and changelog entry is scoped to a tenant. There is no shared data between tenants.
+ZanGuard isolates authorization data by tenant for tuples, attributes, and changelog reads.
 
-## Tenant Isolation
+## How Tenant Identity Is Selected
 
-| Layer | Isolation mechanism |
-|-------|-------------------|
-| **Storage** | Every table has a `tenant_id` column; queries always filter by it |
-| **Engine** | `Check` reads the tenant from `ctx` before any lookup |
-| **Schema** | Each tenant has its own compiled schema (or references a shared one) |
-| **Changelog** | Sequences are per-tenant and independent |
+API surfaces use different tenant selectors:
 
-It is architecturally impossible for one tenant to read another tenant's tuples through the normal API — the tenant ID comes from the request context, not from user input.
+- Management tenant-scoped endpoints use path tenant ID: `/api/v1/t/{tenantID}/...`
+- AuthZen runtime endpoints use header tenant ID: `X-Tenant-ID`
+
+In both cases, the server builds a tenant context from the provided tenant ID before data operations.
+
+## Isolation Guarantees in Current APIs
+
+- Tuple/attribute/changelog operations are scoped to tenant context
+- Runtime checks operate within the tenant from tenant context
+- Normal HTTP APIs do not expose a cross-tenant tuple read/write path
 
 ## Tenant Model
 
 ```go
 type Tenant struct {
-    ID              string       // e.g. "acme" — unique, immutable
-    DisplayName     string       // e.g. "Acme Corp"
-    ParentTenantID  string       // optional: for hierarchical tenants
-    Status          TenantStatus // pending | active | suspended | deleted
-    SchemaMode      SchemaMode   // own | shared | inherited
-    SharedSchemaRef string       // used when SchemaMode == "shared"
-    Config          TenantConfig // quotas, retention, webhooks
+    ID              string
+    DisplayName     string
+    ParentTenantID  string
+    Status          TenantStatus   // pending | active | suspended | deleted
+    SchemaMode      SchemaMode     // own | shared | inherited
+    SharedSchemaRef string
+    Config          TenantConfig
     CreatedAt       time.Time
     UpdatedAt       time.Time
 }
@@ -37,93 +41,39 @@ type Tenant struct {
 
 ## Tenant ID Rules
 
-- Lowercase alphanumeric characters and hyphens only
-- Minimum 2 characters, maximum 128 characters
-- Must start and end with an alphanumeric character
-- Examples: `acme`, `my-org`, `tenant-42`, `a0`
+Current validation accepts:
 
-## Per-Tenant Configuration
+- lowercase letters, digits, hyphen
+- must start/end with alphanumeric
+- length: 2 to 128
 
-```go
-type TenantConfig struct {
-    MaxTuples          int64          // tuple quota (0 = unlimited)
-    MaxRequestsPerSec  int            // rate limit (0 = unlimited)
-    CacheTTLOverride   *time.Duration // per-tenant cache TTL (phase 2)
-    AllowedObjectTypes []string       // restrict which types can be used
-    RetentionDays      int            // changelog retention
-    SyncEnabled        bool           // enable real-time sync (phase 5)
-    WebhookURL         string         // change notification endpoint
-    Metadata           map[string]any // arbitrary key-value pairs
-}
-```
+Examples: `acme`, `my-org`, `tenant-42`, `a0`
 
-## Creating and Managing Tenants
+## Tenant Configuration (Current State)
 
-```go
-mgr := tenant.NewManager(store)
+Tenant config is stored and returned in APIs. Some fields are merged into tenant context defaults.
 
-// Create (starts in "pending" state)
-t, err := mgr.Create(ctx, "acme", "Acme Corp", model.SchemaOwn)
+Not all config fields are currently enforced by runtime code paths.
 
-// Activate (required before any reads or writes)
-err = mgr.Activate(ctx, "acme")
+## Lifecycle Summary
 
-// Suspend (read-only mode, writes rejected)
-err = mgr.Suspend(ctx, "acme")
+- `pending`: tenant exists, write operations are rejected
+- `active`: read/write operations allowed
+- `suspended`: read operations allowed, write operations rejected
+- `deleted`: operations are rejected
 
-// Delete (soft-delete, data retained per retention policy)
-err = mgr.Delete(ctx, "acme")
+See [Tenant Lifecycle](./lifecycle) for exact behavior details.
 
-// Get a tenant
-t, err = mgr.Get(ctx, "acme")
+## Schema Mode Reality
 
-// List tenants with optional filter
-tenants, err := mgr.List(ctx, &model.TenantFilter{
-    Status:   model.TenantActive,
-    ParentID: "parent-org",
-    Limit:    100,
-    Offset:   0,
-})
-```
+- `own`: fully supported through management schema endpoint
+- `shared`: engine supports shared schema refs, but management API does not currently provide a shared-schema registration endpoint
+- `inherited`: currently behaves like own (no parent merge logic yet)
 
-## Tenant Context
+See [Schema Modes](./schema-modes).
 
-Every request must carry a `TenantContext` in `ctx`. This context is the source of truth for all tenant-scoped operations.
+## See Also
 
-```go
-// Build a context for a specific tenant
-tenantCtx, err := tenant.BuildContext(ctx, store, "acme")
-
-// Extract the context in downstream code
-tc := model.TenantFromContext(ctx)
-if tc == nil {
-    return model.ErrNoTenantContext
-}
-fmt.Println(tc.TenantID) // "acme"
-fmt.Println(tc.Tenant.Status) // "active"
-```
-
-See [Tenant Context](./context) for full details.
-
-## Tenant Isolation in Practice
-
-```go
-// Write a tuple under acme
-store.WriteTuple(acmeCtx, &model.RelationTuple{
-    ObjectType: "document", ObjectID: "secret",
-    Relation: "viewer", SubjectType: "user", SubjectID: "alice",
-})
-
-// Check under globex — DENIED (no tuples for globex)
-result, _ := eng.Check(globexCtx, &engine.CheckRequest{
-    ObjectType: "document", ObjectID: "secret",
-    Permission: "view", SubjectType: "user", SubjectID: "alice",
-})
-fmt.Println(result.Allowed) // false — total isolation
-```
-
-## Reference Pages
-
-- [Tenant Lifecycle](./lifecycle) — state machine details
-- [Schema Modes](./schema-modes) — own, shared, inherited
-- [Tenant Context](./context) — context propagation
+- [Tenant Lifecycle](./lifecycle)
+- [Schema Modes](./schema-modes)
+- [Tenant Context](./context)

@@ -6,125 +6,75 @@ sidebar_position: 4
 
 # Tenant Context
 
-The `TenantContext` is the mechanism that binds every storage and engine operation to a specific tenant. It is stored in Go's `context.Context` and propagated through the call stack.
+Tenant context is how ZanGuard binds operations to a tenant in Go code.
 
-## The `TenantContext` Struct
+## Struct
 
 ```go
 type TenantContext struct {
-    TenantID   string        // the tenant's ID
-    Tenant     *Tenant       // the full tenant record
-    SchemaHash string        // SHA-256 hash of the tenant's schema
-    Config     *TenantConfig // tenant quotas and configuration
+    TenantID   string
+    Tenant     *Tenant
+    SchemaHash string
+    Config     *TenantConfig
 }
 ```
 
-## Building a Context
+Current note:
 
-Use `tenant.BuildContext` to create a tenant-scoped context from a base context:
+- `BuildContext` sets `TenantID`, `Tenant`, and merged `Config`
+- `SchemaHash` exists but is not populated by current `BuildContext` path
+
+## Building Context
 
 ```go
 tenantCtx, err := tenant.BuildContext(ctx, store, "acme")
-if err != nil {
-    // returns storage.ErrTenantNotFound if tenant doesn't exist
-}
 ```
 
-`BuildContext` fetches the tenant from the store and injects a `TenantContext` into the returned context. All subsequent store and engine calls using this context will be scoped to `"acme"`.
+`BuildContext`:
 
-## Injecting Manually
+- loads tenant from store
+- merges tenant config defaults
+- injects `TenantContext` into returned `context.Context`
 
-If you already have a `Tenant` object, inject it directly:
-
-```go
-tc := &model.TenantContext{
-    TenantID: "acme",
-    Tenant:   tenant,
-    Config:   &tenant.Config,
-}
-ctx = model.WithTenantContext(ctx, tc)
-```
-
-## Reading the Context
-
-Anywhere in the call stack:
+## Reading Context
 
 ```go
-// Returns nil if not present
 tc := model.TenantFromContext(ctx)
 if tc == nil {
     return model.ErrNoTenantContext
 }
-
-// Panics if not present (use in middleware that guarantees injection)
-tc := model.MustTenantFromContext(ctx)
 ```
 
-## Context Propagation Pattern
+## API-Level Tenant Context Sources
 
-The typical pattern in an HTTP handler or gRPC interceptor:
+In the built-in HTTP server:
+
+- Management tenant-scoped endpoints use path tenant ID (`{tenantID}`)
+- AuthZen runtime endpoints use `X-Tenant-ID` header
+
+Both are converted into tenant context before store/engine calls.
+
+## Manual Injection
+
+If needed, you can inject manually:
 
 ```go
-func TenantMiddleware(store storage.TupleStore) func(http.Handler) http.Handler {
-    return func(next http.Handler) http.Handler {
-        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-            tenantID := r.Header.Get("X-Tenant-ID")
-            if tenantID == "" {
-                http.Error(w, "missing tenant", http.StatusBadRequest)
-                return
-            }
-
-            ctx, err := tenant.BuildContext(r.Context(), store, tenantID)
-            if err != nil {
-                http.Error(w, "tenant not found", http.StatusNotFound)
-                return
-            }
-
-            next.ServeHTTP(w, r.WithContext(ctx))
-        })
-    }
+tc := &model.TenantContext{
+    TenantID: "acme",
+    Tenant:   t,
+    Config:   &t.Config,
 }
+ctx = model.WithTenantContext(ctx, tc)
 ```
 
-Downstream handlers call `model.TenantFromContext(r.Context())` to get the tenant.
+## Concurrency
 
-## Context Key Safety
+Contexts are independent per request/goroutine.
 
-ZanGuard uses an unexported struct type as the context key:
-
-```go
-type tenantContextKeyType struct{}
-var tenantContextKey = tenantContextKeyType{}
-```
-
-This prevents key collisions with any other package using `context.WithValue`.
-
-## Multiple Tenants in One Process
-
-Each goroutine or request can carry its own tenant context:
-
-```go
-// These two contexts are independent — no shared state
-acmeCtx, _ := tenant.BuildContext(ctx, store, "acme")
-globexCtx, _ := tenant.BuildContext(ctx, store, "globex")
-
-// Runs in parallel — each scoped to its own tenant
-go func() { eng.Check(acmeCtx, req) }()
-go func() { eng.Check(globexCtx, req) }()
-```
-
-## Error: No Tenant Context
-
-If you call the engine or store without a tenant context, you get:
-
-```go
-var ErrNoTenantContext = errors.New("no tenant context in request")
-```
-
-This is a programming error — always inject the tenant context before making storage or engine calls.
+You can safely run checks for different tenants concurrently as long as each request uses its own context.
 
 ## See Also
 
-- [Tenant Lifecycle](./lifecycle) — creating and managing tenants
-- [Schema Modes](./schema-modes) — how the schema is resolved from context
-- [Storage Overview](../storage/overview) — how context is used in storage ops
+- [Multi-Tenancy Overview](./overview)
+- [Tenant Lifecycle](./lifecycle)
+- [Storage Overview](../storage/overview)
