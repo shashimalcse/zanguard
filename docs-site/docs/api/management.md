@@ -10,6 +10,8 @@ The Management API lives under `/api/v1/` and covers the full operational surfac
 
 All endpoints return `application/json`. Tenant-scoped management endpoints use the path prefix `/api/v1/t/{tenantID}/...` (tuples, attributes, changelog, expand). Tenant lifecycle and schema endpoints use `/api/v1/tenants/{tenantID}/...`.
 
+OpenAPI: [Download `management-v1.yaml`](/openapi/management-v1.yaml)
+
 ---
 
 ## Tenants

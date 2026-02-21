@@ -1,0 +1,1065 @@
+openapi: 3.0.3
+info:
+  title: ZanGuard Management API
+  version: "1.0.0"
+  description: |
+    Management API for tenant lifecycle, schema management, tuples, attributes,
+    changelog reads, and relation expansion.
+servers:
+  - url: http://localhost:1997
+tags:
+  - name: Health
+  - name: Tenants
+  - name: Schema
+  - name: Tuples
+  - name: Attributes
+  - name: Changelog
+  - name: Expand
+paths:
+  /healthz:
+    get:
+      tags: [Health]
+      summary: Health check
+      operationId: healthz
+      responses:
+        "200":
+          description: Server is running
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /api/v1/tenants:
+    post:
+      tags: [Tenants]
+      summary: Create tenant
+      operationId: createTenant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTenantRequest'
+            examples:
+              ownMode:
+                value:
+                  id: acme
+                  display_name: Acme Corp
+                  schema_mode: own
+      responses:
+        "201":
+          description: Tenant created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      tags: [Tenants]
+      summary: List tenants
+      operationId: listTenants
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [pending, active, suspended, deleted]
+        - in: query
+          name: parent_id
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 0
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        "200":
+          description: Tenant list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListTenantsResponse'
+        "400":
+          description: Invalid query parameter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/tenants/{tenantID}:
+    parameters:
+      - $ref: '#/components/parameters/TenantID'
+    get:
+      tags: [Tenants]
+      summary: Get tenant
+      operationId: getTenant
+      responses:
+        "200":
+          description: Tenant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+        "404":
+          description: Tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      tags: [Tenants]
+      summary: Soft-delete tenant
+      operationId: deleteTenant
+      responses:
+        "204":
+          description: Tenant deleted
+        "404":
+          description: Tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "410":
+          description: Tenant already deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/tenants/{tenantID}/activate:
+    parameters:
+      - $ref: '#/components/parameters/TenantID'
+    post:
+      tags: [Tenants]
+      summary: Activate tenant
+      operationId: activateTenant
+      responses:
+        "200":
+          description: Updated tenant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+        "404":
+          description: Tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "410":
+          description: Tenant has been deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/tenants/{tenantID}/suspend:
+    parameters:
+      - $ref: '#/components/parameters/TenantID'
+    post:
+      tags: [Tenants]
+      summary: Suspend tenant
+      operationId: suspendTenant
+      responses:
+        "200":
+          description: Updated tenant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+        "400":
+          description: Invalid tenant state transition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "404":
+          description: Tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "410":
+          description: Tenant has been deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/tenants/{tenantID}/schema:
+    parameters:
+      - $ref: '#/components/parameters/TenantID'
+    put:
+      tags: [Schema]
+      summary: Load or replace tenant schema
+      operationId: loadSchema
+      requestBody:
+        required: true
+        content:
+          application/yaml:
+            schema:
+              type: string
+          text/yaml:
+            schema:
+              type: string
+          text/plain:
+            schema:
+              type: string
+      responses:
+        "200":
+          description: Compiled schema metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SchemaResponse'
+        "400":
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "404":
+          description: Tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "422":
+          description: Parse, compile, or schema validation error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ErrorResponse'
+                  - $ref: '#/components/schemas/SchemaValidationErrorResponse'
+
+    get:
+      tags: [Schema]
+      summary: Get loaded tenant schema
+      operationId: getSchema
+      responses:
+        "200":
+          description: Loaded schema metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SchemaResponse'
+        "404":
+          description: Tenant not found or schema not loaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/t/{tenantID}/tuples:
+    parameters:
+      - $ref: '#/components/parameters/TenantID'
+    post:
+      tags: [Tuples]
+      summary: Write tuple
+      operationId: writeTuple
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TupleRequest'
+      responses:
+        "201":
+          description: Tuple inserted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusOKResponse'
+        "400":
+          description: Invalid JSON or required fields missing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "403":
+          description: Tenant is not writable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "404":
+          description: Tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "409":
+          description: Duplicate tuple
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "410":
+          description: Tenant deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "429":
+          description: Quota exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      tags: [Tuples]
+      summary: Delete tuple
+      operationId: deleteTuple
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TupleRequest'
+      responses:
+        "204":
+          description: Tuple deleted
+        "400":
+          description: Invalid JSON or required fields missing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "403":
+          description: Tenant is not writable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "404":
+          description: Tenant or tuple not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "410":
+          description: Tenant deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      tags: [Tuples]
+      summary: Read tuples
+      operationId: readTuples
+      parameters:
+        - in: query
+          name: object_type
+          schema:
+            type: string
+        - in: query
+          name: object_id
+          schema:
+            type: string
+        - in: query
+          name: relation
+          schema:
+            type: string
+        - in: query
+          name: subject_type
+          schema:
+            type: string
+        - in: query
+          name: subject_id
+          schema:
+            type: string
+        - in: query
+          name: subject_relation
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Tuples
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TuplesResponse'
+        "404":
+          description: Tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "410":
+          description: Tenant deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/t/{tenantID}/tuples/batch:
+    parameters:
+      - $ref: '#/components/parameters/TenantID'
+    post:
+      tags: [Tuples]
+      summary: Batch write tuples (atomic)
+      operationId: writeTuplesBatch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchTuplesRequest'
+      responses:
+        "201":
+          description: Batch inserted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchWriteResponse'
+        "400":
+          description: Invalid JSON, empty tuples list, or invalid tuple entry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "403":
+          description: Tenant is not writable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "404":
+          description: Tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "409":
+          description: Duplicate tuple in batch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "410":
+          description: Tenant deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "429":
+          description: Quota exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/t/{tenantID}/attributes/objects/{type}/{id}:
+    parameters:
+      - $ref: '#/components/parameters/TenantID'
+      - $ref: '#/components/parameters/ObjectTypePath'
+      - $ref: '#/components/parameters/ObjectIDPath'
+    put:
+      tags: [Attributes]
+      summary: Set object attributes
+      operationId: setObjectAttributes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AttributesRequest'
+      responses:
+        "200":
+          description: Attributes stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttributesResponse'
+        "400":
+          description: Invalid JSON
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "403":
+          description: Tenant is not writable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "404":
+          description: Tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "410":
+          description: Tenant deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      tags: [Attributes]
+      summary: Get object attributes
+      operationId: getObjectAttributes
+      responses:
+        "200":
+          description: Attributes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttributesResponse'
+        "404":
+          description: Tenant/object not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "410":
+          description: Tenant deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/t/{tenantID}/attributes/subjects/{type}/{id}:
+    parameters:
+      - $ref: '#/components/parameters/TenantID'
+      - $ref: '#/components/parameters/SubjectTypePath'
+      - $ref: '#/components/parameters/SubjectIDPath'
+    put:
+      tags: [Attributes]
+      summary: Set subject attributes
+      operationId: setSubjectAttributes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AttributesRequest'
+      responses:
+        "200":
+          description: Attributes stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttributesResponse'
+        "400":
+          description: Invalid JSON
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "403":
+          description: Tenant is not writable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "404":
+          description: Tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "410":
+          description: Tenant deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      tags: [Attributes]
+      summary: Get subject attributes
+      operationId: getSubjectAttributes
+      responses:
+        "200":
+          description: Attributes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttributesResponse'
+        "404":
+          description: Tenant/subject not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "410":
+          description: Tenant deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/t/{tenantID}/changelog:
+    parameters:
+      - $ref: '#/components/parameters/TenantID'
+    get:
+      tags: [Changelog]
+      summary: Read changelog entries
+      operationId: readChangelog
+      parameters:
+        - in: query
+          name: since_seq
+          schema:
+            type: integer
+            format: uint64
+            minimum: 0
+          description: Return entries with sequence strictly greater than this value
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 0
+            default: 100
+      responses:
+        "200":
+          description: Changelog entries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangelogResponse'
+        "400":
+          description: Invalid query parameter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "404":
+          description: Tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "410":
+          description: Tenant deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/t/{tenantID}/expand:
+    parameters:
+      - $ref: '#/components/parameters/TenantID'
+    post:
+      tags: [Expand]
+      summary: Expand direct relation subjects
+      operationId: expandRelation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExpandRequest'
+      responses:
+        "200":
+          description: Subject tree
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubjectTree'
+        "400":
+          description: Invalid JSON or required fields missing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "404":
+          description: Tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "410":
+          description: Tenant deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  parameters:
+    TenantID:
+      name: tenantID
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Tenant identifier
+    ObjectTypePath:
+      name: type
+      in: path
+      required: true
+      schema:
+        type: string
+    ObjectIDPath:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    SubjectTypePath:
+      name: type
+      in: path
+      required: true
+      schema:
+        type: string
+    SubjectIDPath:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          example: ok
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+    SchemaValidationErrorResponse:
+      type: object
+      required: [error, details]
+      properties:
+        error:
+          type: string
+          example: schema validation failed
+        details:
+          type: array
+          items:
+            type: string
+
+    StatusOKResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          example: ok
+
+    BatchWriteResponse:
+      type: object
+      required: [status, count]
+      properties:
+        status:
+          type: string
+          example: ok
+        count:
+          type: integer
+          minimum: 0
+
+    MapStringAny:
+      type: object
+      additionalProperties: true
+
+    CreateTenantRequest:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+          description: Lowercase tenant ID (3-128 chars, letters/digits/hyphen)
+        display_name:
+          type: string
+        schema_mode:
+          type: string
+          enum: [own, shared, inherited]
+          default: own
+        parent_tenant_id:
+          type: string
+        shared_schema_ref:
+          type: string
+          description: Required when schema_mode is shared
+
+    TenantConfig:
+      type: object
+      properties:
+        max_tuples:
+          type: integer
+          format: int64
+        max_requests_per_sec:
+          type: integer
+        cache_ttl_override:
+          type: integer
+          format: int64
+          description: Duration in nanoseconds
+        allowed_object_types:
+          type: array
+          items:
+            type: string
+        retention_days:
+          type: integer
+        sync_enabled:
+          type: boolean
+        webhook_url:
+          type: string
+        metadata:
+          $ref: '#/components/schemas/MapStringAny'
+
+    Tenant:
+      type: object
+      required:
+        - id
+        - display_name
+        - status
+        - schema_mode
+        - config
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        display_name:
+          type: string
+        parent_tenant_id:
+          type: string
+        status:
+          type: string
+          enum: [pending, active, suspended, deleted]
+        schema_mode:
+          type: string
+          enum: [own, shared, inherited]
+        shared_schema_ref:
+          type: string
+        config:
+          $ref: '#/components/schemas/TenantConfig'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ListTenantsResponse:
+      type: object
+      required: [tenants, count]
+      properties:
+        tenants:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tenant'
+        count:
+          type: integer
+          minimum: 0
+
+    SchemaResponse:
+      type: object
+      required: [tenant_id, hash, version, source, compiled_at]
+      properties:
+        tenant_id:
+          type: string
+        hash:
+          type: string
+        version:
+          type: string
+        source:
+          type: string
+        compiled_at:
+          type: string
+          format: date-time
+
+    TupleRequest:
+      type: object
+      required: [object_type, object_id, relation, subject_type, subject_id]
+      properties:
+        object_type:
+          type: string
+        object_id:
+          type: string
+        relation:
+          type: string
+        subject_type:
+          type: string
+        subject_id:
+          type: string
+        subject_relation:
+          type: string
+        attributes:
+          $ref: '#/components/schemas/MapStringAny'
+
+    BatchTuplesRequest:
+      type: object
+      required: [tuples]
+      properties:
+        tuples:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/TupleRequest'
+
+    RelationTuple:
+      type: object
+      required:
+        - tenant_id
+        - object_type
+        - object_id
+        - relation
+        - subject_type
+        - subject_id
+        - created_at
+        - updated_at
+      properties:
+        tenant_id:
+          type: string
+        object_type:
+          type: string
+        object_id:
+          type: string
+        relation:
+          type: string
+        subject_type:
+          type: string
+        subject_id:
+          type: string
+        subject_relation:
+          type: string
+        subject_tenant_id:
+          type: string
+        attributes:
+          $ref: '#/components/schemas/MapStringAny'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        source_system:
+          type: string
+        external_id:
+          type: string
+
+    TuplesResponse:
+      type: object
+      required: [tuples, count]
+      properties:
+        tuples:
+          type: array
+          items:
+            $ref: '#/components/schemas/RelationTuple'
+        count:
+          type: integer
+          minimum: 0
+
+    AttributesRequest:
+      type: object
+      properties:
+        attributes:
+          $ref: '#/components/schemas/MapStringAny'
+
+    AttributesResponse:
+      type: object
+      required: [attributes]
+      properties:
+        attributes:
+          $ref: '#/components/schemas/MapStringAny'
+
+    ChangeOperation:
+      type: string
+      enum: [INSERT, DELETE, UPDATE]
+
+    ChangelogEntry:
+      type: object
+      required: [seq, tenant_id, op, tuple, ts, actor, source]
+      properties:
+        seq:
+          type: integer
+          format: uint64
+          minimum: 0
+        tenant_id:
+          type: string
+        op:
+          $ref: '#/components/schemas/ChangeOperation'
+        tuple:
+          $ref: '#/components/schemas/RelationTuple'
+        ts:
+          type: string
+          format: date-time
+        actor:
+          type: string
+        source:
+          type: string
+          enum: [api, import, sync]
+        meta:
+          $ref: '#/components/schemas/MapStringAny'
+
+    ChangelogResponse:
+      type: object
+      required: [entries, count, latest_sequence]
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChangelogEntry'
+        count:
+          type: integer
+          minimum: 0
+        latest_sequence:
+          type: integer
+          format: uint64
+          minimum: 0
+
+    ExpandRequest:
+      type: object
+      required: [object_type, object_id, relation]
+      properties:
+        object_type:
+          type: string
+        object_id:
+          type: string
+        relation:
+          type: string
+
+    SubjectRef:
+      type: object
+      required: [Type, ID]
+      properties:
+        Type:
+          type: string
+        ID:
+          type: string
+        Relation:
+          type: string
+
+    SubjectTree:
+      type: object
+      required: [Subject]
+      properties:
+        Subject:
+          $ref: '#/components/schemas/SubjectRef'
+        Children:
+          type: array
+          nullable: true
+          items:
+            $ref: '#/components/schemas/SubjectTree'

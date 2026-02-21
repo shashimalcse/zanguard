@@ -10,6 +10,8 @@ ZanGuard implements the [AuthZen 1.0](https://openid.net/wg/authzen/) specificat
 
 The AuthZen API lives under `/access/v1/` and is separate from the Management API.
 
+OpenAPI: [Download `runtime-authzen-v1.yaml`](/openapi/runtime-authzen-v1.yaml)
+
 ---
 
 ## Key concepts

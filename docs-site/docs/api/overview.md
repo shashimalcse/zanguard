@@ -13,6 +13,18 @@ ZanGuard exposes two HTTP API surfaces over a single server process:
 | Management API | `/api/v1/` | Tenant lifecycle, schema loading, tuple writes, attributes, changelog |
 | AuthZen Runtime API | `/access/v1/` | AuthZen 1.0-compliant permission evaluation |
 
+## OpenAPI Specs
+
+- [Management API OpenAPI (`management-v1.yaml`)](/openapi/management-v1.yaml)
+- [AuthZen Runtime API OpenAPI (`runtime-authzen-v1.yaml`)](/openapi/runtime-authzen-v1.yaml)
+
+Download example:
+
+```bash
+curl -LO http://localhost:1997/openapi/management-v1.yaml
+curl -LO http://localhost:1997/openapi/runtime-authzen-v1.yaml
+```
+
 ## Starting the server
 
 Recommended:

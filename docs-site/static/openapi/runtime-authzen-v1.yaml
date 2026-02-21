@@ -1,0 +1,173 @@
+openapi: 3.0.3
+info:
+  title: ZanGuard AuthZen Runtime API
+  version: "1.0.0"
+  description: |
+    AuthZen 1.0-compatible runtime decision APIs.
+
+    Tenant is identified by the `X-Tenant-ID` header.
+    Per AuthZen behavior, evaluation failures return `200` with `decision: false`.
+servers:
+  - url: http://localhost:1997
+tags:
+  - name: Runtime
+paths:
+  /access/v1/evaluation:
+    post:
+      tags: [Runtime]
+      summary: Evaluate a single access decision
+      operationId: evaluateAccess
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthZenEvaluationRequest'
+      responses:
+        "200":
+          description: Evaluation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthZenEvaluationResponse'
+        "400":
+          description: Missing tenant header or invalid JSON body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /access/v1/evaluations:
+    post:
+      tags: [Runtime]
+      summary: Evaluate multiple access decisions for one subject
+      operationId: evaluateAccessBatch
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthZenBatchRequest'
+      responses:
+        "200":
+          description: Batch evaluation results in request order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthZenBatchResponse'
+        "400":
+          description: Missing tenant header or invalid JSON body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  parameters:
+    TenantHeader:
+      in: header
+      name: X-Tenant-ID
+      required: true
+      schema:
+        type: string
+      description: Tenant identifier
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+    MapStringAny:
+      type: object
+      additionalProperties: true
+
+    AuthZenSubject:
+      type: object
+      required: [type, id]
+      properties:
+        type:
+          type: string
+        id:
+          type: string
+        properties:
+          $ref: '#/components/schemas/MapStringAny'
+
+    AuthZenResource:
+      type: object
+      required: [type, id]
+      properties:
+        type:
+          type: string
+        id:
+          type: string
+        properties:
+          $ref: '#/components/schemas/MapStringAny'
+
+    AuthZenAction:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        properties:
+          $ref: '#/components/schemas/MapStringAny'
+
+    AuthZenEvaluationRequest:
+      type: object
+      required: [subject, resource, action]
+      properties:
+        subject:
+          $ref: '#/components/schemas/AuthZenSubject'
+        resource:
+          $ref: '#/components/schemas/AuthZenResource'
+        action:
+          $ref: '#/components/schemas/AuthZenAction'
+        context:
+          $ref: '#/components/schemas/MapStringAny'
+
+    AuthZenEvaluationResponse:
+      type: object
+      required: [decision]
+      properties:
+        decision:
+          type: boolean
+        context:
+          $ref: '#/components/schemas/MapStringAny'
+
+    AuthZenBatchItem:
+      type: object
+      required: [resource, action]
+      properties:
+        resource:
+          $ref: '#/components/schemas/AuthZenResource'
+        action:
+          $ref: '#/components/schemas/AuthZenAction'
+        context:
+          $ref: '#/components/schemas/MapStringAny'
+
+    AuthZenBatchRequest:
+      type: object
+      required: [subject, evaluations]
+      properties:
+        subject:
+          $ref: '#/components/schemas/AuthZenSubject'
+        evaluations:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuthZenBatchItem'
+
+    AuthZenBatchResponse:
+      type: object
+      required: [evaluations]
+      properties:
+        evaluations:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuthZenEvaluationResponse'
