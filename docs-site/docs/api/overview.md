@@ -15,19 +15,27 @@ ZanGuard exposes two HTTP API surfaces over a single server process:
 
 ## Starting the server
 
+Recommended:
+
 ```bash
-go run ./cmd/server/main.go
+docker compose up --build
 ```
 
-By default the server listens on `:8080`. Override the address with the `ZANGUARD_ADDR` environment variable:
+Or run directly with Go:
 
 ```bash
-ZANGUARD_ADDR=:9090 go run ./cmd/server/main.go
+DATABASE_URL='postgres://zanguard:zanguard@localhost:5432/zanguard?sslmode=disable' go run ./cmd/server/main.go
+```
+
+By default the server listens on `:1997`. Override the address with the `ZANGUARD_ADDR` environment variable:
+
+```bash
+ZANGUARD_ADDR=:9090 DATABASE_URL='postgres://zanguard:zanguard@localhost:5432/zanguard?sslmode=disable' go run ./cmd/server/main.go
 ```
 
 ## Base URL
 
-All examples in this reference assume the server is reachable at `http://localhost:8080`. Replace this with your deployment address as needed.
+All examples in this reference assume the server is reachable at `http://localhost:1997`. Replace this with your deployment address as needed.
 
 ## Content type
 
@@ -37,7 +45,11 @@ All request and response bodies are JSON. Set the following header on every requ
 Content-Type: application/json
 ```
 
-The single exception is `PUT /api/v1/tenants/{tenantID}/schema`, which accepts a raw YAML body — omit the `Content-Type` header or set it to `application/yaml`.
+The single exception is `PUT /api/v1/tenants/{tenantID}/schema`, which accepts a raw YAML body. Use:
+
+```
+Content-Type: application/yaml
+```
 
 ## Tenant identification
 
@@ -103,7 +115,7 @@ Schema validation failures include an additional `details` array:
 ## Health check
 
 ```bash
-curl http://localhost:8080/healthz
+curl http://localhost:1997/healthz
 ```
 
 ```json

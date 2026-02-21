@@ -43,7 +43,7 @@ type RelationTuple struct {
     Attributes      map[string]any // optional: tuple-level metadata
     CreatedAt       time.Time
     UpdatedAt       time.Time
-    SourceSystem    string         // optional: migration provenance
+    SourceSystem    string         // optional: external provenance
     ExternalID      string         // optional: external system ID
 }
 ```

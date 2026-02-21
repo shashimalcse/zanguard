@@ -99,7 +99,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	)
 }
 
-// Start begins listening on addr (e.g. ":8080").
+// Start begins listening on addr (e.g. ":1997").
 func (s *Server) Start(addr string) error {
 	s.log.Info("server listening", "addr", addr)
 	return http.ListenAndServe(addr, s)

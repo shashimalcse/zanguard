@@ -108,7 +108,7 @@ Evaluates whether a subject is allowed to perform an action on a resource.
 ### Example — access granted
 
 ```bash
-curl -X POST http://localhost:8080/access/v1/evaluation \
+curl -X POST http://localhost:1997/access/v1/evaluation \
   -H "Content-Type: application/json" \
   -H "X-Tenant-ID: acme" \
   -d '{
@@ -133,7 +133,7 @@ curl -X POST http://localhost:8080/access/v1/evaluation \
 ### Example — access denied
 
 ```bash
-curl -X POST http://localhost:8080/access/v1/evaluation \
+curl -X POST http://localhost:1997/access/v1/evaluation \
   -H "Content-Type: application/json" \
   -H "X-Tenant-ID: acme" \
   -d '{
@@ -160,7 +160,7 @@ curl -X POST http://localhost:8080/access/v1/evaluation \
 Pass additional context values for ABAC condition evaluation using the `context` field:
 
 ```bash
-curl -X POST http://localhost:8080/access/v1/evaluation \
+curl -X POST http://localhost:1997/access/v1/evaluation \
   -H "Content-Type: application/json" \
   -H "X-Tenant-ID: acme" \
   -d '{
@@ -273,7 +273,7 @@ Per-item errors do not affect other items in the batch. A failing evaluation for
 ### Example
 
 ```bash
-curl -X POST http://localhost:8080/access/v1/evaluations \
+curl -X POST http://localhost:1997/access/v1/evaluations \
   -H "Content-Type: application/json" \
   -H "X-Tenant-ID: acme" \
   -d '{

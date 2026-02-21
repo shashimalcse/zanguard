@@ -1,4 +1,4 @@
-.PHONY: build test lint migrate-up migrate-down tidy
+.PHONY: build test lint tidy run compose-up compose-down compose-logs
 
 build:
 	go build ./...
@@ -15,13 +15,15 @@ lint:
 tidy:
 	go mod tidy
 
-migrate-up:
-	@if [ -z "$(DATABASE_URL)" ]; then echo "DATABASE_URL not set"; exit 1; fi
-	migrate -path migrations -database "$(DATABASE_URL)" up
-
-migrate-down:
-	@if [ -z "$(DATABASE_URL)" ]; then echo "DATABASE_URL not set"; exit 1; fi
-	migrate -path migrations -database "$(DATABASE_URL)" down 1
-
 run:
+	@if [ -z "$(DATABASE_URL)" ]; then echo "DATABASE_URL not set"; exit 1; fi
 	go run cmd/server/main.go
+
+compose-up:
+	docker compose up --build -d
+
+compose-down:
+	docker compose down
+
+compose-logs:
+	docker compose logs -f zanguard postgres

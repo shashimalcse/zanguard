@@ -44,7 +44,7 @@ Creates a new tenant. The tenant starts in the `pending` state. Call `/activate`
 | `shared_schema_ref` | string | no | Reference to the shared schema tenant |
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/tenants \
+curl -X POST http://localhost:1997/api/v1/tenants \
   -H "Content-Type: application/json" \
   -d '{
     "id": "acme",
@@ -96,7 +96,7 @@ Returns all tenants, with optional filtering and pagination.
 | `offset` | integer | Number of results to skip (for pagination) |
 
 ```bash
-curl "http://localhost:8080/api/v1/tenants?status=active&limit=10"
+curl "http://localhost:1997/api/v1/tenants?status=active&limit=10"
 ```
 
 #### Response — `200 OK`
@@ -132,7 +132,7 @@ curl "http://localhost:8080/api/v1/tenants?status=active&limit=10"
 Returns a single tenant by ID.
 
 ```bash
-curl http://localhost:8080/api/v1/tenants/acme
+curl http://localhost:1997/api/v1/tenants/acme
 ```
 
 #### Response — `200 OK`
@@ -169,7 +169,7 @@ curl http://localhost:8080/api/v1/tenants/acme
 Soft-deletes a tenant by transitioning it to `deleted`. Returns `204 No Content` on success.
 
 ```bash
-curl -X DELETE http://localhost:8080/api/v1/tenants/acme
+curl -X DELETE http://localhost:1997/api/v1/tenants/acme
 ```
 
 #### Response — `204 No Content`
@@ -191,7 +191,7 @@ No response body.
 Transitions the tenant from `pending` or `suspended` to `active`. A tenant must be active before tuples, attributes, or permission checks can be performed against it.
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/tenants/acme/activate
+curl -X POST http://localhost:1997/api/v1/tenants/acme/activate
 ```
 
 #### Response — `200 OK`
@@ -231,7 +231,7 @@ Returns the updated tenant object.
 Transitions the tenant to `suspended`. Suspended tenants allow reads but reject writes.
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/tenants/acme/suspend
+curl -X POST http://localhost:1997/api/v1/tenants/acme/suspend
 ```
 
 #### Response — `200 OK`
@@ -286,15 +286,18 @@ Uploads a raw YAML schema for the tenant. The schema is parsed, compiled, and va
 The request body is the raw YAML text — not JSON-encoded.
 
 ```bash
-curl -X PUT http://localhost:8080/api/v1/tenants/acme/schema \
+curl -X PUT http://localhost:1997/api/v1/tenants/acme/schema \
+  -H "Content-Type: application/yaml" \
   --data-binary @schema.yaml
 ```
 
-Or inline:
+Inline alternative:
 
 ```bash
-curl -X PUT http://localhost:8080/api/v1/tenants/acme/schema \
-  -d 'version: "1.0"
+curl -X PUT http://localhost:1997/api/v1/tenants/acme/schema \
+  -H "Content-Type: application/yaml" \
+  --data-binary @- <<'YAML'
+version: "1.0"
 types:
   user: {}
   document:
@@ -309,7 +312,8 @@ types:
           - viewer
           - owner
       delete:
-        resolve: owner'
+        resolve: owner
+YAML
 ```
 
 #### Response — `200 OK`
@@ -362,7 +366,7 @@ On validation failure the response body includes a `details` array:
 Returns the currently loaded schema for the tenant.
 
 ```bash
-curl http://localhost:8080/api/v1/tenants/acme/schema
+curl http://localhost:1997/api/v1/tenants/acme/schema
 ```
 
 #### Response — `200 OK`
@@ -421,7 +425,7 @@ Writes a single relation tuple for the tenant.
 | `attributes` | object | no | Arbitrary key-value metadata attached to the tuple |
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/t/acme/tuples \
+curl -X POST http://localhost:1997/api/v1/t/acme/tuples \
   -H "Content-Type: application/json" \
   -d '{
     "object_type": "document",
@@ -463,7 +467,7 @@ Writes multiple tuples in a single request. All tuples are written atomically �
 | `tuples` | array | yes | Array of tuple objects (same fields as single write) |
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/t/acme/tuples/batch \
+curl -X POST http://localhost:1997/api/v1/t/acme/tuples/batch \
   -H "Content-Type: application/json" \
   -d '{
     "tuples": [
@@ -510,7 +514,7 @@ curl -X POST http://localhost:8080/api/v1/t/acme/tuples/batch \
 Deletes a single relation tuple. The tuple to delete is identified by the request body.
 
 ```bash
-curl -X DELETE http://localhost:8080/api/v1/t/acme/tuples \
+curl -X DELETE http://localhost:1997/api/v1/t/acme/tuples \
   -H "Content-Type: application/json" \
   -d '{
     "object_type": "document",
@@ -553,7 +557,7 @@ Reads tuples for the tenant. All query parameters are optional — omitting all 
 | `subject_relation` | Filter by subject relation (userset references) |
 
 ```bash
-curl "http://localhost:8080/api/v1/t/acme/tuples?object_type=document&object_id=readme"
+curl "http://localhost:1997/api/v1/t/acme/tuples?object_type=document&object_id=readme"
 ```
 
 #### Response — `200 OK`
@@ -633,7 +637,7 @@ Replaces the attributes for the object identified by `{type}` and `{id}`. The pr
 
 ```bash
 curl -X PUT \
-  "http://localhost:8080/api/v1/t/acme/attributes/objects/document/readme" \
+  "http://localhost:1997/api/v1/t/acme/attributes/objects/document/readme" \
   -H "Content-Type: application/json" \
   -d '{
     "attributes": {
@@ -671,7 +675,7 @@ curl -X PUT \
 Returns the attributes stored for the specified object.
 
 ```bash
-curl "http://localhost:8080/api/v1/t/acme/attributes/objects/document/readme"
+curl "http://localhost:1997/api/v1/t/acme/attributes/objects/document/readme"
 ```
 
 #### Response — `200 OK`
@@ -709,7 +713,7 @@ Replaces the attributes for the subject identified by `{type}` and `{id}`.
 
 ```bash
 curl -X PUT \
-  "http://localhost:8080/api/v1/t/acme/attributes/subjects/user/alice" \
+  "http://localhost:1997/api/v1/t/acme/attributes/subjects/user/alice" \
   -H "Content-Type: application/json" \
   -d '{
     "attributes": {
@@ -747,7 +751,7 @@ curl -X PUT \
 Returns the attributes stored for the specified subject.
 
 ```bash
-curl "http://localhost:8080/api/v1/t/acme/attributes/subjects/user/alice"
+curl "http://localhost:1997/api/v1/t/acme/attributes/subjects/user/alice"
 ```
 
 #### Response — `200 OK`
@@ -790,7 +794,7 @@ Returns changelog entries for the tenant starting after the given sequence numbe
 | `limit` | integer | `100` | Maximum number of entries to return |
 
 ```bash
-curl "http://localhost:8080/api/v1/t/acme/changelog?since_seq=0&limit=50"
+curl "http://localhost:1997/api/v1/t/acme/changelog?since_seq=0&limit=50"
 ```
 
 #### Response — `200 OK`
@@ -832,7 +836,7 @@ curl "http://localhost:8080/api/v1/t/acme/changelog?since_seq=0&limit=50"
 | `entries[].tuple` | The tuple that was affected |
 | `entries[].ts` | UTC timestamp of the change |
 | `entries[].actor` | Identity that made the change (may be empty) |
-| `entries[].source` | Source of the change: `api`, `migration`, or `sync` |
+| `entries[].source` | Source of the change: `api`, `import`, or `sync` |
 | `count` | Number of entries returned |
 | `latest_sequence` | Highest sequence number currently in the changelog |
 
@@ -868,7 +872,7 @@ Expands direct subjects for `object_type:object_id#relation`.
 | `relation` | string | yes | Relation to expand |
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/t/acme/expand \
+curl -X POST http://localhost:1997/api/v1/t/acme/expand \
   -H "Content-Type: application/json" \
   -d '{
     "object_type": "document",

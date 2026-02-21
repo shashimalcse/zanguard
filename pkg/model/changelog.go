@@ -19,6 +19,6 @@ type ChangelogEntry struct {
 	Tuple     RelationTuple  `json:"tuple"`
 	Timestamp time.Time      `json:"ts"`
 	Actor     string         `json:"actor"`
-	Source    string         `json:"source"` // "api", "migration", "sync"
+	Source    string         `json:"source"` // "api", "import", "sync"
 	Metadata  map[string]any `json:"meta,omitempty"`
 }

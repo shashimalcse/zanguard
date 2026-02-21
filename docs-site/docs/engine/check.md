@@ -199,11 +199,13 @@ package main
 import (
     "context"
     "fmt"
+    "log"
+    "os"
 
     "zanguard/pkg/engine"
     "zanguard/pkg/model"
     "zanguard/pkg/schema"
-    "zanguard/pkg/storage/memory"
+    "zanguard/pkg/storage/postgres"
     "zanguard/pkg/tenant"
 )
 
@@ -230,7 +232,12 @@ types:
 
 func main() {
     ctx := context.Background()
-    store := memory.New()
+    dsn := os.Getenv("DATABASE_URL")
+    store, err := postgres.New(ctx, dsn)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer store.Close()
 
     mgr := tenant.NewManager(store)
     mgr.Create(ctx, "acme", "Acme", model.SchemaOwn)

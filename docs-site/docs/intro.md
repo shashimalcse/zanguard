@@ -51,7 +51,7 @@ A permission check traverses these tuples — following userset expansions, arro
 | **Multi-Tenancy** | Complete data isolation per tenant with three schema modes |
 | **Schema DSL** | Declarative YAML schema for types, relations, and permissions |
 | **Audit Changelog** | Append-only, sequenced log of all data mutations |
-| **Dual Backends** | In-memory (testing/edge) and PostgreSQL (production) |
+| **PostgreSQL Backend** | Production-grade persistence via `pgx/v5` |
 
 ## Design Goals
 
@@ -68,11 +68,11 @@ cmd/server/         ← Demo / entry point
 pkg/
   engine/           ← Permission check algorithm
   schema/           ← YAML DSL parser & compiler
-  storage/          ← PostgreSQL + in-memory backends
+  storage/          ← PostgreSQL backend + store interfaces
   tenant/           ← Multi-tenancy lifecycle & context
   model/            ← Core types (RelationTuple, Tenant, …)
 configs/examples/   ← Example schemas
-migrations/         ← PostgreSQL migrations
+deployments/        ← PostgreSQL init scripts
 ```
 
 ## Tech Stack

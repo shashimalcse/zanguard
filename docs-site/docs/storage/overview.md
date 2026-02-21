@@ -6,7 +6,7 @@ sidebar_position: 1
 
 # Storage
 
-ZanGuard uses a storage abstraction layer so the same engine and business logic work with any backend.
+ZanGuard uses a storage abstraction layer internally. The supported runtime backend is PostgreSQL.
 
 ## The `TupleStore` Interface
 
@@ -53,11 +53,10 @@ type TupleStore interface {
 }
 ```
 
-## Available Backends
+## Backend
 
 | Backend | Package | Use case |
 |---------|---------|---------|
-| In-memory | `pkg/storage/memory` | Tests, local development, edge deployments |
 | PostgreSQL | `pkg/storage/postgres` | Production |
 
 ## Sentinel Errors
@@ -136,6 +135,5 @@ err := store.ExportTenantSnapshot(ctx, &buf)
 
 ## See Also
 
-- [In-Memory Store](./in-memory) — usage and API details
 - [PostgreSQL Store](./postgresql) — production setup
 - [Changelog](./changelog) — audit log details

@@ -50,7 +50,6 @@ const sidebars = {
       collapsed: false,
       items: [
         'storage/overview',
-        'storage/in-memory',
         'storage/postgresql',
         'storage/changelog',
       ],

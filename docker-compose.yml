@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: zanguard-postgres
+    environment:
+      POSTGRES_DB: zanguard
+      POSTGRES_USER: zanguard
+      POSTGRES_PASSWORD: zanguard
+    ports:
+      - "5432:5432"
+    volumes:
+      - zanguard_pgdata:/var/lib/postgresql/data
+      - ./deployments/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zanguard -d zanguard"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  zanguard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: zanguard
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://zanguard:zanguard@postgres:5432/zanguard?sslmode=disable
+      ZANGUARD_ADDR: :1997
+      ZANGUARD_DB_MAX_CONNS: "20"
+    ports:
+      - "1997:1997"
+    restart: unless-stopped
+
+volumes:
+  zanguard_pgdata:

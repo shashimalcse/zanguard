@@ -65,6 +65,8 @@ types:
 
 ## Setup
 
+Assume imports include `log`, `os`, and `zanguard/pkg/storage/postgres`.
+
 ```go
 const clearanceSchema = `
 version: "1.0"
@@ -92,7 +94,11 @@ types:
         condition: "subject.clearance_level >= 3"
 `
 
-store := memory.New()
+store, err := postgres.New(ctx, os.Getenv("DATABASE_URL"))
+if err != nil {
+    log.Fatal(err)
+}
+defer store.Close()
 mgr := tenant.NewManager(store)
 mgr.Create(ctx, "demo", "Demo", model.SchemaOwn)
 mgr.Activate(ctx, "demo")
