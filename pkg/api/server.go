@@ -64,22 +64,22 @@ func (s *Server) registerRoutes() {
 
 	// ── Management: Tuples ───────────────────────────────────────────────────
 	// /batch must be registered before the bare /tuples POST to ensure correct matching
-	s.mux.HandleFunc("POST /api/v1/tuples/batch", s.handleWriteTuples)
-	s.mux.HandleFunc("POST /api/v1/tuples", s.handleWriteTuple)
-	s.mux.HandleFunc("DELETE /api/v1/tuples", s.handleDeleteTuple)
-	s.mux.HandleFunc("GET /api/v1/tuples", s.handleReadTuples)
+	s.mux.HandleFunc("POST /api/v1/t/{tenantID}/tuples/batch", s.handleWriteTuples)
+	s.mux.HandleFunc("POST /api/v1/t/{tenantID}/tuples", s.handleWriteTuple)
+	s.mux.HandleFunc("DELETE /api/v1/t/{tenantID}/tuples", s.handleDeleteTuple)
+	s.mux.HandleFunc("GET /api/v1/t/{tenantID}/tuples", s.handleReadTuples)
 
 	// ── Management: Attributes ───────────────────────────────────────────────
-	s.mux.HandleFunc("GET /api/v1/attributes/objects/{type}/{id}", s.handleGetObjectAttributes)
-	s.mux.HandleFunc("PUT /api/v1/attributes/objects/{type}/{id}", s.handleSetObjectAttributes)
-	s.mux.HandleFunc("GET /api/v1/attributes/subjects/{type}/{id}", s.handleGetSubjectAttributes)
-	s.mux.HandleFunc("PUT /api/v1/attributes/subjects/{type}/{id}", s.handleSetSubjectAttributes)
+	s.mux.HandleFunc("GET /api/v1/t/{tenantID}/attributes/objects/{type}/{id}", s.handleGetObjectAttributes)
+	s.mux.HandleFunc("PUT /api/v1/t/{tenantID}/attributes/objects/{type}/{id}", s.handleSetObjectAttributes)
+	s.mux.HandleFunc("GET /api/v1/t/{tenantID}/attributes/subjects/{type}/{id}", s.handleGetSubjectAttributes)
+	s.mux.HandleFunc("PUT /api/v1/t/{tenantID}/attributes/subjects/{type}/{id}", s.handleSetSubjectAttributes)
 
 	// ── Management: Changelog ────────────────────────────────────────────────
-	s.mux.HandleFunc("GET /api/v1/changelog", s.handleReadChangelog)
+	s.mux.HandleFunc("GET /api/v1/t/{tenantID}/changelog", s.handleReadChangelog)
 
 	// ── Management: Expand ───────────────────────────────────────────────────
-	s.mux.HandleFunc("POST /api/v1/expand", s.handleExpand)
+	s.mux.HandleFunc("POST /api/v1/t/{tenantID}/expand", s.handleExpand)
 
 	// ── AuthZen 1.0 ──────────────────────────────────────────────────────────
 	s.mux.HandleFunc("POST /access/v1/evaluation", s.handleAuthZenEvaluation)

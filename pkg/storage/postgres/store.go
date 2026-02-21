@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"zanguard/pkg/model"
@@ -66,6 +67,68 @@ func tenantIDFromCtx(ctx context.Context) (string, error) {
 	return tc.TenantID, nil
 }
 
+func (s *Store) tenantStatus(ctx context.Context, tenantID string) (model.TenantStatus, error) {
+	var status model.TenantStatus
+	err := s.pool.QueryRow(ctx, `
+		SELECT status
+		FROM tenants
+		WHERE id=$1 AND deleted_at IS NULL`,
+		tenantID,
+	).Scan(&status)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", storage.ErrTenantNotFound
+		}
+		return "", err
+	}
+	return status, nil
+}
+
+func (s *Store) ensureTenantReadable(ctx context.Context, tenantID string) error {
+	status, err := s.tenantStatus(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+	if status == model.TenantDeleted {
+		return storage.ErrTenantDeleted
+	}
+	return nil
+}
+
+func (s *Store) ensureTenantWritable(ctx context.Context, tenantID string) error {
+	status, err := s.tenantStatus(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+	switch status {
+	case model.TenantDeleted:
+		return storage.ErrTenantDeleted
+	case model.TenantActive:
+		return nil
+	default:
+		return storage.ErrTenantSuspended
+	}
+}
+
+func (s *Store) appendChangelogTx(ctx context.Context, tx pgx.Tx, tenantID string, entry *model.ChangelogEntry) error {
+	metaJSON, _ := json.Marshal(entry.Metadata)
+	_, err := tx.Exec(ctx, `
+		INSERT INTO changelog (tenant_id, operation, object_type, object_id, relation,
+		  subject_type, subject_id, subject_relation, actor, source, metadata)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,NULLIF($8,''),$9,$10,$11)`,
+		tenantID, string(entry.Operation),
+		entry.Tuple.ObjectType, entry.Tuple.ObjectID, entry.Tuple.Relation,
+		entry.Tuple.SubjectType, entry.Tuple.SubjectID, entry.Tuple.SubjectRelation,
+		entry.Actor, entry.Source, metaJSON,
+	)
+	return err
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
 // -- Tenant management --
 
 func (s *Store) CreateTenant(ctx context.Context, tenant *model.Tenant) error {
@@ -114,14 +177,20 @@ func (s *Store) UpdateTenant(ctx context.Context, tenant *model.Tenant) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.pool.Exec(ctx, `
+	tag, err := s.pool.Exec(ctx, `
 		UPDATE tenants SET display_name=$2, status=$3, schema_mode=$4,
 		shared_schema_ref=NULLIF($5,''), config=$6, updated_at=NOW()
 		WHERE id=$1`,
 		tenant.ID, tenant.DisplayName, string(tenant.Status), string(tenant.SchemaMode),
 		tenant.SharedSchemaRef, configJSON,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return storage.ErrTenantNotFound
+	}
+	return nil
 }
 
 func (s *Store) ListTenants(ctx context.Context, filter *model.TenantFilter) ([]*model.Tenant, error) {
@@ -139,6 +208,17 @@ func (s *Store) ListTenants(ctx context.Context, filter *model.TenantFilter) ([]
 	if filter != nil && filter.ParentID != "" {
 		query += fmt.Sprintf(" AND parent_tenant_id = $%d", argN)
 		args = append(args, filter.ParentID)
+		argN++
+	}
+	query += " ORDER BY id"
+	if filter != nil && filter.Limit > 0 {
+		query += fmt.Sprintf(" LIMIT $%d", argN)
+		args = append(args, filter.Limit)
+		argN++
+	}
+	if filter != nil && filter.Offset > 0 {
+		query += fmt.Sprintf(" OFFSET $%d", argN)
+		args = append(args, filter.Offset)
 	}
 
 	rows, err := s.pool.Query(ctx, query, args...)
@@ -170,27 +250,100 @@ func (s *Store) WriteTuple(ctx context.Context, tuple *model.RelationTuple) erro
 	if err != nil {
 		return err
 	}
-	_, err = s.pool.Exec(ctx, `
+	if err := s.ensureTenantWritable(ctx, tenantID); err != nil {
+		return err
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	_, err = tx.Exec(ctx, `
 		INSERT INTO relation_tuples
 		  (tenant_id, object_type, object_id, relation, subject_type, subject_id, subject_relation,
 		   subject_tenant_id, source_system, external_id)
-		VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7,''),NULLIF($8,''),NULLIF($9,''),NULLIF($10,''))
-		ON CONFLICT (tenant_id, object_type, object_id, relation, subject_type, subject_id, subject_relation)
-		DO UPDATE SET updated_at = NOW()`,
+		VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7,''),NULLIF($8,''),NULLIF($9,''),NULLIF($10,''))`,
 		tenantID, tuple.ObjectType, tuple.ObjectID, tuple.Relation,
 		tuple.SubjectType, tuple.SubjectID, tuple.SubjectRelation,
 		tuple.SubjectTenantID, tuple.SourceSystem, tuple.ExternalID,
 	)
-	return err
+	if err != nil {
+		if isUniqueViolation(err) {
+			return storage.ErrDuplicateTuple
+		}
+		return err
+	}
+
+	if err := s.appendChangelogTx(ctx, tx, tenantID, &model.ChangelogEntry{
+		Operation: model.ChangeOpInsert,
+		Tuple: model.RelationTuple{
+			TenantID:        tenantID,
+			ObjectType:      tuple.ObjectType,
+			ObjectID:        tuple.ObjectID,
+			Relation:        tuple.Relation,
+			SubjectType:     tuple.SubjectType,
+			SubjectID:       tuple.SubjectID,
+			SubjectRelation: tuple.SubjectRelation,
+		},
+		Source: "api",
+	}); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
 }
 
 func (s *Store) WriteTuples(ctx context.Context, tuples []*model.RelationTuple) error {
-	for _, t := range tuples {
-		if err := s.WriteTuple(ctx, t); err != nil {
+	tenantID, err := tenantIDFromCtx(ctx)
+	if err != nil {
+		return err
+	}
+	if err := s.ensureTenantWritable(ctx, tenantID); err != nil {
+		return err
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	for _, tuple := range tuples {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO relation_tuples
+			  (tenant_id, object_type, object_id, relation, subject_type, subject_id, subject_relation,
+			   subject_tenant_id, source_system, external_id)
+			VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7,''),NULLIF($8,''),NULLIF($9,''),NULLIF($10,''))`,
+			tenantID, tuple.ObjectType, tuple.ObjectID, tuple.Relation,
+			tuple.SubjectType, tuple.SubjectID, tuple.SubjectRelation,
+			tuple.SubjectTenantID, tuple.SourceSystem, tuple.ExternalID,
+		)
+		if err != nil {
+			if isUniqueViolation(err) {
+				return storage.ErrDuplicateTuple
+			}
+			return err
+		}
+		if err := s.appendChangelogTx(ctx, tx, tenantID, &model.ChangelogEntry{
+			Operation: model.ChangeOpInsert,
+			Tuple: model.RelationTuple{
+				TenantID:        tenantID,
+				ObjectType:      tuple.ObjectType,
+				ObjectID:        tuple.ObjectID,
+				Relation:        tuple.Relation,
+				SubjectType:     tuple.SubjectType,
+				SubjectID:       tuple.SubjectID,
+				SubjectRelation: tuple.SubjectRelation,
+			},
+			Source: "api",
+		}); err != nil {
 			return err
 		}
 	}
-	return nil
+
+	return tx.Commit(ctx)
 }
 
 func (s *Store) DeleteTuple(ctx context.Context, tuple *model.RelationTuple) error {
@@ -198,7 +351,17 @@ func (s *Store) DeleteTuple(ctx context.Context, tuple *model.RelationTuple) err
 	if err != nil {
 		return err
 	}
-	_, err = s.pool.Exec(ctx, `
+	if err := s.ensureTenantWritable(ctx, tenantID); err != nil {
+		return err
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	tag, err := tx.Exec(ctx, `
 		UPDATE relation_tuples SET deleted_at = NOW()
 		WHERE tenant_id=$1 AND object_type=$2 AND object_id=$3 AND relation=$4
 		  AND subject_type=$5 AND subject_id=$6 AND COALESCE(subject_relation,'')=$7
@@ -206,12 +369,38 @@ func (s *Store) DeleteTuple(ctx context.Context, tuple *model.RelationTuple) err
 		tenantID, tuple.ObjectType, tuple.ObjectID, tuple.Relation,
 		tuple.SubjectType, tuple.SubjectID, tuple.SubjectRelation,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return storage.ErrNotFound
+	}
+
+	if err := s.appendChangelogTx(ctx, tx, tenantID, &model.ChangelogEntry{
+		Operation: model.ChangeOpDelete,
+		Tuple: model.RelationTuple{
+			TenantID:        tenantID,
+			ObjectType:      tuple.ObjectType,
+			ObjectID:        tuple.ObjectID,
+			Relation:        tuple.Relation,
+			SubjectType:     tuple.SubjectType,
+			SubjectID:       tuple.SubjectID,
+			SubjectRelation: tuple.SubjectRelation,
+		},
+		Source: "api",
+	}); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
 }
 
 func (s *Store) ReadTuples(ctx context.Context, filter *model.TupleFilter) ([]*model.RelationTuple, error) {
 	tenantID, err := tenantIDFromCtx(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureTenantReadable(ctx, tenantID); err != nil {
 		return nil, err
 	}
 
@@ -280,6 +469,9 @@ func (s *Store) CheckDirect(ctx context.Context, objectType, objectID, relation,
 	if err != nil {
 		return false, err
 	}
+	if err := s.ensureTenantReadable(ctx, tenantID); err != nil {
+		return false, err
+	}
 	var exists bool
 	err = s.pool.QueryRow(ctx, `
 		SELECT EXISTS(SELECT 1 FROM relation_tuples
@@ -294,6 +486,9 @@ func (s *Store) CheckDirect(ctx context.Context, objectType, objectID, relation,
 func (s *Store) ListRelatedObjects(ctx context.Context, objectType, objectID, relation string) ([]*model.ObjectRef, error) {
 	tenantID, err := tenantIDFromCtx(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureTenantReadable(ctx, tenantID); err != nil {
 		return nil, err
 	}
 	rows, err := s.pool.Query(ctx, `
@@ -320,6 +515,9 @@ func (s *Store) ListRelatedObjects(ctx context.Context, objectType, objectID, re
 func (s *Store) ListSubjects(ctx context.Context, objectType, objectID, relation string) ([]*model.SubjectRef, error) {
 	tenantID, err := tenantIDFromCtx(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureTenantReadable(ctx, tenantID); err != nil {
 		return nil, err
 	}
 	rows, err := s.pool.Query(ctx, `
@@ -358,6 +556,9 @@ func (s *Store) Expand(ctx context.Context, objectType, objectID, relation strin
 }
 
 func (s *Store) CheckDirectCrossTenant(ctx context.Context, targetTenantID, objectType, objectID, relation, subjectType, subjectID string) (bool, error) {
+	if err := s.ensureTenantReadable(ctx, targetTenantID); err != nil {
+		return false, err
+	}
 	var exists bool
 	err := s.pool.QueryRow(ctx, `
 		SELECT EXISTS(SELECT 1 FROM relation_tuples
@@ -375,6 +576,9 @@ func (s *Store) GetObjectAttributes(ctx context.Context, objectType, objectID st
 	if err != nil {
 		return nil, err
 	}
+	if err := s.ensureTenantReadable(ctx, tenantID); err != nil {
+		return nil, err
+	}
 	var attrsJSON []byte
 	err = s.pool.QueryRow(ctx, `
 		SELECT attributes FROM object_attributes WHERE tenant_id=$1 AND object_type=$2 AND object_id=$3`,
@@ -382,7 +586,7 @@ func (s *Store) GetObjectAttributes(ctx context.Context, objectType, objectID st
 	).Scan(&attrsJSON)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return map[string]any{}, nil
+			return nil, storage.ErrNotFound
 		}
 		return nil, err
 	}
@@ -396,6 +600,9 @@ func (s *Store) GetObjectAttributes(ctx context.Context, objectType, objectID st
 func (s *Store) SetObjectAttributes(ctx context.Context, objectType, objectID string, attrs map[string]any) error {
 	tenantID, err := tenantIDFromCtx(ctx)
 	if err != nil {
+		return err
+	}
+	if err := s.ensureTenantWritable(ctx, tenantID); err != nil {
 		return err
 	}
 	attrsJSON, err := json.Marshal(attrs)
@@ -417,6 +624,9 @@ func (s *Store) GetSubjectAttributes(ctx context.Context, subjectType, subjectID
 	if err != nil {
 		return nil, err
 	}
+	if err := s.ensureTenantReadable(ctx, tenantID); err != nil {
+		return nil, err
+	}
 	var attrsJSON []byte
 	err = s.pool.QueryRow(ctx, `
 		SELECT attributes FROM subject_attributes WHERE tenant_id=$1 AND subject_type=$2 AND subject_id=$3`,
@@ -424,7 +634,7 @@ func (s *Store) GetSubjectAttributes(ctx context.Context, subjectType, subjectID
 	).Scan(&attrsJSON)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return map[string]any{}, nil
+			return nil, storage.ErrNotFound
 		}
 		return nil, err
 	}
@@ -438,6 +648,9 @@ func (s *Store) GetSubjectAttributes(ctx context.Context, subjectType, subjectID
 func (s *Store) SetSubjectAttributes(ctx context.Context, subjectType, subjectID string, attrs map[string]any) error {
 	tenantID, err := tenantIDFromCtx(ctx)
 	if err != nil {
+		return err
+	}
+	if err := s.ensureTenantWritable(ctx, tenantID); err != nil {
 		return err
 	}
 	attrsJSON, err := json.Marshal(attrs)
@@ -461,22 +674,26 @@ func (s *Store) AppendChangelog(ctx context.Context, entry *model.ChangelogEntry
 	if err != nil {
 		return err
 	}
-	metaJSON, _ := json.Marshal(entry.Metadata)
-	_, err = s.pool.Exec(ctx, `
-		INSERT INTO changelog (tenant_id, operation, object_type, object_id, relation,
-		  subject_type, subject_id, subject_relation, actor, source, metadata)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,NULLIF($8,''),$9,$10,$11)`,
-		tenantID, string(entry.Operation),
-		entry.Tuple.ObjectType, entry.Tuple.ObjectID, entry.Tuple.Relation,
-		entry.Tuple.SubjectType, entry.Tuple.SubjectID, entry.Tuple.SubjectRelation,
-		entry.Actor, entry.Source, metaJSON,
-	)
-	return err
+	if err := s.ensureTenantWritable(ctx, tenantID); err != nil {
+		return err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := s.appendChangelogTx(ctx, tx, tenantID, entry); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) ReadChangelog(ctx context.Context, sinceSeq uint64, limit int) ([]*model.ChangelogEntry, error) {
 	tenantID, err := tenantIDFromCtx(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureTenantReadable(ctx, tenantID); err != nil {
 		return nil, err
 	}
 	if limit <= 0 {
@@ -513,6 +730,9 @@ func (s *Store) LatestSequence(ctx context.Context) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if err := s.ensureTenantReadable(ctx, tenantID); err != nil {
+		return 0, err
+	}
 	var seq uint64
 	err = s.pool.QueryRow(ctx, `SELECT COALESCE(MAX(sequence),0) FROM changelog WHERE tenant_id=$1`, tenantID).Scan(&seq)
 	return seq, err
@@ -525,6 +745,9 @@ func (s *Store) CountTuples(ctx context.Context) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if err := s.ensureTenantReadable(ctx, tenantID); err != nil {
+		return 0, err
+	}
 	var count int64
 	err = s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM relation_tuples WHERE tenant_id=$1 AND deleted_at IS NULL`, tenantID).Scan(&count)
 	return count, err
@@ -533,6 +756,9 @@ func (s *Store) CountTuples(ctx context.Context) (int64, error) {
 func (s *Store) PurgeTenantData(ctx context.Context) error {
 	tenantID, err := tenantIDFromCtx(ctx)
 	if err != nil {
+		return err
+	}
+	if err := s.ensureTenantWritable(ctx, tenantID); err != nil {
 		return err
 	}
 	_, err = s.pool.Exec(ctx, `DELETE FROM relation_tuples WHERE tenant_id=$1`, tenantID)
@@ -554,6 +780,9 @@ func (s *Store) PurgeTenantData(ctx context.Context) error {
 func (s *Store) ExportTenantSnapshot(ctx context.Context, w io.Writer) error {
 	tenantID, err := tenantIDFromCtx(ctx)
 	if err != nil {
+		return err
+	}
+	if err := s.ensureTenantReadable(ctx, tenantID); err != nil {
 		return err
 	}
 	rows, err := s.pool.Query(ctx, `

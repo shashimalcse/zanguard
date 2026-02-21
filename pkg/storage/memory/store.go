@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"sync"
 	"time"
 
@@ -20,11 +21,11 @@ type Store struct {
 	tenants map[string]*model.Tenant
 
 	// Per-tenant data buckets
-	tuples    map[string][]*model.RelationTuple         // tenantID → tuples
-	objAttrs  map[string]map[string]map[string]any      // tenantID → "type:id" → attrs
-	subAttrs  map[string]map[string]map[string]any      // tenantID → "type:id" → attrs
-	changelog map[string][]*model.ChangelogEntry        // tenantID → entries
-	seqCounter map[string]uint64                        // tenantID → next sequence number
+	tuples     map[string][]*model.RelationTuple    // tenantID → tuples
+	objAttrs   map[string]map[string]map[string]any // tenantID → "type:id" → attrs
+	subAttrs   map[string]map[string]map[string]any // tenantID → "type:id" → attrs
+	changelog  map[string][]*model.ChangelogEntry   // tenantID → entries
+	seqCounter map[string]uint64                    // tenantID → next sequence number
 }
 
 // New creates a new in-memory store.
@@ -121,7 +122,8 @@ func (s *Store) ListTenants(ctx context.Context, filter *model.TenantFilter) ([]
 		cp := *t
 		result = append(result, &cp)
 	}
-	return result, nil
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return applyTenantFilter(result, filter), nil
 }
 
 // -- Core CRUD --
@@ -138,37 +140,22 @@ func (s *Store) WriteTuple(ctx context.Context, tuple *model.RelationTuple) erro
 	if err := s.checkTenantWritable(tenantID); err != nil {
 		return err
 	}
-
-	// Uniqueness check
-	for _, t := range s.tuples[tenantID] {
-		if t.ObjectType == tuple.ObjectType &&
-			t.ObjectID == tuple.ObjectID &&
-			t.Relation == tuple.Relation &&
-			t.SubjectType == tuple.SubjectType &&
-			t.SubjectID == tuple.SubjectID &&
-			t.SubjectRelation == tuple.SubjectRelation {
-			return storage.ErrDuplicateTuple
-		}
-	}
-
-	now := time.Now().UTC()
-	t := *tuple
-	t.TenantID = tenantID
-	if t.CreatedAt.IsZero() {
-		t.CreatedAt = now
-	}
-	t.UpdatedAt = now
-	s.tuples[tenantID] = append(s.tuples[tenantID], &t)
-	return nil
+	return s.writeTuplesLocked(tenantID, []*model.RelationTuple{tuple})
 }
 
 func (s *Store) WriteTuples(ctx context.Context, tuples []*model.RelationTuple) error {
-	for _, t := range tuples {
-		if err := s.WriteTuple(ctx, t); err != nil {
-			return err
-		}
+	tenantID, err := tenantIDFromCtx(ctx)
+	if err != nil {
+		return err
 	}
-	return nil
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.checkTenantWritable(tenantID); err != nil {
+		return err
+	}
+	return s.writeTuplesLocked(tenantID, tuples)
 }
 
 func (s *Store) DeleteTuple(ctx context.Context, tuple *model.RelationTuple) error {
@@ -193,6 +180,7 @@ func (s *Store) DeleteTuple(ctx context.Context, tuple *model.RelationTuple) err
 			t.SubjectID == tuple.SubjectID &&
 			t.SubjectRelation == tuple.SubjectRelation {
 			s.tuples[tenantID] = append(ts[:i], ts[i+1:]...)
+			s.appendTupleChangelogUnsafe(tenantID, model.ChangeOpDelete, t, "api")
 			return nil
 		}
 	}
@@ -358,11 +346,15 @@ func (s *Store) GetObjectAttributes(ctx context.Context, objectType, objectID st
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	if err := s.checkTenantReadable(tenantID); err != nil {
+		return nil, err
+	}
+
 	key := objectType + ":" + objectID
 	if attrs, ok := s.objAttrs[tenantID][key]; ok {
 		return copyMap(attrs), nil
 	}
-	return map[string]any{}, nil
+	return nil, storage.ErrNotFound
 }
 
 func (s *Store) SetObjectAttributes(ctx context.Context, objectType, objectID string, attrs map[string]any) error {
@@ -373,6 +365,10 @@ func (s *Store) SetObjectAttributes(ctx context.Context, objectType, objectID st
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if err := s.checkTenantWritable(tenantID); err != nil {
+		return err
+	}
 
 	key := objectType + ":" + objectID
 	s.objAttrs[tenantID][key] = copyMap(attrs)
@@ -388,11 +384,15 @@ func (s *Store) GetSubjectAttributes(ctx context.Context, subjectType, subjectID
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	if err := s.checkTenantReadable(tenantID); err != nil {
+		return nil, err
+	}
+
 	key := subjectType + ":" + subjectID
 	if attrs, ok := s.subAttrs[tenantID][key]; ok {
 		return copyMap(attrs), nil
 	}
-	return map[string]any{}, nil
+	return nil, storage.ErrNotFound
 }
 
 func (s *Store) SetSubjectAttributes(ctx context.Context, subjectType, subjectID string, attrs map[string]any) error {
@@ -403,6 +403,10 @@ func (s *Store) SetSubjectAttributes(ctx context.Context, subjectType, subjectID
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if err := s.checkTenantWritable(tenantID); err != nil {
+		return err
+	}
 
 	key := subjectType + ":" + subjectID
 	s.subAttrs[tenantID][key] = copyMap(attrs)
@@ -419,6 +423,10 @@ func (s *Store) AppendChangelog(ctx context.Context, entry *model.ChangelogEntry
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if err := s.checkTenantWritable(tenantID); err != nil {
+		return err
+	}
 
 	s.seqCounter[tenantID]++
 	e := *entry
@@ -439,6 +447,10 @@ func (s *Store) ReadChangelog(ctx context.Context, sinceSeq uint64, limit int) (
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
+	if err := s.checkTenantReadable(tenantID); err != nil {
+		return nil, err
+	}
 
 	var result []*model.ChangelogEntry
 	for _, e := range s.changelog[tenantID] {
@@ -462,6 +474,10 @@ func (s *Store) LatestSequence(ctx context.Context) (uint64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	if err := s.checkTenantReadable(tenantID); err != nil {
+		return 0, err
+	}
+
 	return s.seqCounter[tenantID], nil
 }
 
@@ -475,6 +491,10 @@ func (s *Store) CountTuples(ctx context.Context) (int64, error) {
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
+	if err := s.checkTenantReadable(tenantID); err != nil {
+		return 0, err
+	}
 
 	return int64(len(s.tuples[tenantID])), nil
 }
@@ -506,6 +526,10 @@ func (s *Store) ExportTenantSnapshot(ctx context.Context, w io.Writer) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	if err := s.checkTenantReadable(tenantID); err != nil {
+		return err
+	}
+
 	enc := json.NewEncoder(w)
 	for _, t := range s.tuples[tenantID] {
 		if err := enc.Encode(t); err != nil {
@@ -516,6 +540,80 @@ func (s *Store) ExportTenantSnapshot(ctx context.Context, w io.Writer) error {
 }
 
 // -- helpers --
+
+func (s *Store) writeTuplesLocked(tenantID string, tuples []*model.RelationTuple) error {
+	if len(tuples) == 0 {
+		return nil
+	}
+
+	existingKeys := make(map[string]struct{}, len(s.tuples[tenantID]))
+	for _, t := range s.tuples[tenantID] {
+		existingKeys[tupleIdentityKey(t)] = struct{}{}
+	}
+	batchKeys := make(map[string]struct{}, len(tuples))
+	now := time.Now().UTC()
+	staged := make([]*model.RelationTuple, len(tuples))
+
+	for i, tuple := range tuples {
+		key := tupleIdentityKey(tuple)
+		if _, ok := existingKeys[key]; ok {
+			return storage.ErrDuplicateTuple
+		}
+		if _, ok := batchKeys[key]; ok {
+			return storage.ErrDuplicateTuple
+		}
+		batchKeys[key] = struct{}{}
+
+		cp := *tuple
+		cp.TenantID = tenantID
+		if cp.CreatedAt.IsZero() {
+			cp.CreatedAt = now
+		}
+		cp.UpdatedAt = now
+		staged[i] = &cp
+	}
+
+	s.tuples[tenantID] = append(s.tuples[tenantID], staged...)
+	for _, t := range staged {
+		s.appendTupleChangelogUnsafe(tenantID, model.ChangeOpInsert, t, "api")
+	}
+	return nil
+}
+
+func (s *Store) appendTupleChangelogUnsafe(tenantID string, op model.ChangeOp, tuple *model.RelationTuple, source string) {
+	s.seqCounter[tenantID]++
+	entry := &model.ChangelogEntry{
+		Sequence:  s.seqCounter[tenantID],
+		TenantID:  tenantID,
+		Operation: op,
+		Tuple:     *tuple,
+		Timestamp: time.Now().UTC(),
+		Source:    source,
+	}
+	s.changelog[tenantID] = append(s.changelog[tenantID], entry)
+}
+
+func tupleIdentityKey(t *model.RelationTuple) string {
+	return fmt.Sprintf("%s:%s#%s@%s:%s#%s", t.ObjectType, t.ObjectID, t.Relation, t.SubjectType, t.SubjectID, t.SubjectRelation)
+}
+
+func applyTenantFilter(tenants []*model.Tenant, filter *model.TenantFilter) []*model.Tenant {
+	if filter == nil {
+		return tenants
+	}
+	if filter.Offset >= len(tenants) {
+		return []*model.Tenant{}
+	}
+	start := filter.Offset
+	if start < 0 {
+		start = 0
+	}
+	end := len(tenants)
+	if filter.Limit > 0 && start+filter.Limit < end {
+		end = start + filter.Limit
+	}
+	return tenants[start:end]
+}
 
 func (s *Store) checkTenantWritable(tenantID string) error {
 	t, ok := s.tenants[tenantID]

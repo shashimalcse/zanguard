@@ -1,13 +1,53 @@
 package api
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"zanguard/pkg/model"
 	"zanguard/pkg/schema"
 )
+
+func tenantContextErrStatus(err error) int {
+	status := errStatus(err)
+	if status == http.StatusInternalServerError {
+		return http.StatusBadRequest
+	}
+	return status
+}
+
+func parseNonNegativeInt(raw, name string) (int, error) {
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer", name)
+	}
+	if n < 0 {
+		return 0, fmt.Errorf("%s must be non-negative", name)
+	}
+	return n, nil
+}
+
+func validateTupleRequest(req TupleRequest) error {
+	if strings.TrimSpace(req.ObjectType) == "" {
+		return fmt.Errorf("object_type is required")
+	}
+	if strings.TrimSpace(req.ObjectID) == "" {
+		return fmt.Errorf("object_id is required")
+	}
+	if strings.TrimSpace(req.Relation) == "" {
+		return fmt.Errorf("relation is required")
+	}
+	if strings.TrimSpace(req.SubjectType) == "" {
+		return fmt.Errorf("subject_type is required")
+	}
+	if strings.TrimSpace(req.SubjectID) == "" {
+		return fmt.Errorf("subject_id is required")
+	}
+	return nil
+}
 
 // ── Health ───────────────────────────────────────────────────────────────────
 
@@ -31,6 +71,16 @@ func (s *Server) handleCreateTenant(w http.ResponseWriter, r *http.Request) {
 	if req.SchemaMode == "" {
 		req.SchemaMode = model.SchemaOwn
 	}
+	switch req.SchemaMode {
+	case model.SchemaOwn, model.SchemaShared, model.SchemaInherited:
+	default:
+		writeError(w, http.StatusBadRequest, "invalid schema_mode")
+		return
+	}
+	if req.SchemaMode == model.SchemaShared && req.SharedSchemaRef == "" {
+		writeError(w, http.StatusBadRequest, "shared_schema_ref is required when schema_mode=shared")
+		return
+	}
 
 	t, err := s.mgr.Create(r.Context(), req.ID, req.DisplayName, req.SchemaMode)
 	if err != nil {
@@ -42,7 +92,10 @@ func (s *Server) handleCreateTenant(w http.ResponseWriter, r *http.Request) {
 	if req.ParentTenantID != "" || req.SharedSchemaRef != "" {
 		t.ParentTenantID = req.ParentTenantID
 		t.SharedSchemaRef = req.SharedSchemaRef
-		_ = s.store.UpdateTenant(r.Context(), t)
+		if err := s.store.UpdateTenant(r.Context(), t); err != nil {
+			writeError(w, errStatus(err), err.Error())
+			return
+		}
 	}
 
 	writeJSON(w, http.StatusCreated, t)
@@ -59,10 +112,20 @@ func (s *Server) handleListTenants(w http.ResponseWriter, r *http.Request) {
 		filter.ParentID = v
 	}
 	if v := q.Get("limit"); v != "" {
-		filter.Limit, _ = strconv.Atoi(v)
+		n, err := parseNonNegativeInt(v, "limit")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		filter.Limit = n
 	}
 	if v := q.Get("offset"); v != "" {
-		filter.Offset, _ = strconv.Atoi(v)
+		n, err := parseNonNegativeInt(v, "offset")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		filter.Offset = n
 	}
 
 	tenants, err := s.mgr.List(r.Context(), filter)
@@ -197,17 +260,21 @@ func (s *Server) handleGetSchema(w http.ResponseWriter, r *http.Request) {
 
 // ── Tuples ───────────────────────────────────────────────────────────────────
 
-// POST /api/v1/tuples
+// POST /api/v1/t/{tenantID}/tuples
 func (s *Server) handleWriteTuple(w http.ResponseWriter, r *http.Request) {
-	tCtx, err := s.tenantCtxFromHeader(r.Context(), r)
+	tCtx, err := s.tenantCtxFromPath(r.Context(), r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, tenantContextErrStatus(err), err.Error())
 		return
 	}
 
 	var req TupleRequest
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+	if err := validateTupleRequest(req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -218,11 +285,11 @@ func (s *Server) handleWriteTuple(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
 }
 
-// POST /api/v1/tuples/batch
+// POST /api/v1/t/{tenantID}/tuples/batch
 func (s *Server) handleWriteTuples(w http.ResponseWriter, r *http.Request) {
-	tCtx, err := s.tenantCtxFromHeader(r.Context(), r)
+	tCtx, err := s.tenantCtxFromPath(r.Context(), r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, tenantContextErrStatus(err), err.Error())
 		return
 	}
 
@@ -231,9 +298,17 @@ func (s *Server) handleWriteTuples(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
 		return
 	}
+	if len(req.Tuples) == 0 {
+		writeError(w, http.StatusBadRequest, "tuples must contain at least one entry")
+		return
+	}
 
 	tuples := make([]*model.RelationTuple, len(req.Tuples))
 	for i, t := range req.Tuples {
+		if err := validateTupleRequest(t); err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("tuples[%d]: %v", i, err))
+			return
+		}
 		tuples[i] = tupleFromRequest(t)
 	}
 
@@ -244,17 +319,21 @@ func (s *Server) handleWriteTuples(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"status": "ok", "count": len(tuples)})
 }
 
-// DELETE /api/v1/tuples   (body identifies the tuple to delete)
+// DELETE /api/v1/t/{tenantID}/tuples   (body identifies the tuple to delete)
 func (s *Server) handleDeleteTuple(w http.ResponseWriter, r *http.Request) {
-	tCtx, err := s.tenantCtxFromHeader(r.Context(), r)
+	tCtx, err := s.tenantCtxFromPath(r.Context(), r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, tenantContextErrStatus(err), err.Error())
 		return
 	}
 
 	var req TupleRequest
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+	if err := validateTupleRequest(req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -265,11 +344,11 @@ func (s *Server) handleDeleteTuple(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// GET /api/v1/tuples?object_type=&object_id=&relation=&subject_type=&subject_id=&subject_relation=
+// GET /api/v1/t/{tenantID}/tuples?object_type=&object_id=&relation=&subject_type=&subject_id=&subject_relation=
 func (s *Server) handleReadTuples(w http.ResponseWriter, r *http.Request) {
-	tCtx, err := s.tenantCtxFromHeader(r.Context(), r)
+	tCtx, err := s.tenantCtxFromPath(r.Context(), r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, tenantContextErrStatus(err), err.Error())
 		return
 	}
 
@@ -293,11 +372,11 @@ func (s *Server) handleReadTuples(w http.ResponseWriter, r *http.Request) {
 
 // ── Attributes ───────────────────────────────────────────────────────────────
 
-// PUT /api/v1/attributes/objects/{type}/{id}
+// PUT /api/v1/t/{tenantID}/attributes/objects/{type}/{id}
 func (s *Server) handleSetObjectAttributes(w http.ResponseWriter, r *http.Request) {
-	tCtx, err := s.tenantCtxFromHeader(r.Context(), r)
+	tCtx, err := s.tenantCtxFromPath(r.Context(), r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, tenantContextErrStatus(err), err.Error())
 		return
 	}
 
@@ -315,11 +394,11 @@ func (s *Server) handleSetObjectAttributes(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, AttributesResponse{Attributes: req.Attributes})
 }
 
-// GET /api/v1/attributes/objects/{type}/{id}
+// GET /api/v1/t/{tenantID}/attributes/objects/{type}/{id}
 func (s *Server) handleGetObjectAttributes(w http.ResponseWriter, r *http.Request) {
-	tCtx, err := s.tenantCtxFromHeader(r.Context(), r)
+	tCtx, err := s.tenantCtxFromPath(r.Context(), r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, tenantContextErrStatus(err), err.Error())
 		return
 	}
 
@@ -331,11 +410,11 @@ func (s *Server) handleGetObjectAttributes(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, AttributesResponse{Attributes: attrs})
 }
 
-// PUT /api/v1/attributes/subjects/{type}/{id}
+// PUT /api/v1/t/{tenantID}/attributes/subjects/{type}/{id}
 func (s *Server) handleSetSubjectAttributes(w http.ResponseWriter, r *http.Request) {
-	tCtx, err := s.tenantCtxFromHeader(r.Context(), r)
+	tCtx, err := s.tenantCtxFromPath(r.Context(), r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, tenantContextErrStatus(err), err.Error())
 		return
 	}
 
@@ -353,11 +432,11 @@ func (s *Server) handleSetSubjectAttributes(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, AttributesResponse{Attributes: req.Attributes})
 }
 
-// GET /api/v1/attributes/subjects/{type}/{id}
+// GET /api/v1/t/{tenantID}/attributes/subjects/{type}/{id}
 func (s *Server) handleGetSubjectAttributes(w http.ResponseWriter, r *http.Request) {
-	tCtx, err := s.tenantCtxFromHeader(r.Context(), r)
+	tCtx, err := s.tenantCtxFromPath(r.Context(), r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, tenantContextErrStatus(err), err.Error())
 		return
 	}
 
@@ -371,11 +450,11 @@ func (s *Server) handleGetSubjectAttributes(w http.ResponseWriter, r *http.Reque
 
 // ── Changelog ────────────────────────────────────────────────────────────────
 
-// GET /api/v1/changelog?since_seq=0&limit=100
+// GET /api/v1/t/{tenantID}/changelog?since_seq=0&limit=100
 func (s *Server) handleReadChangelog(w http.ResponseWriter, r *http.Request) {
-	tCtx, err := s.tenantCtxFromHeader(r.Context(), r)
+	tCtx, err := s.tenantCtxFromPath(r.Context(), r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, tenantContextErrStatus(err), err.Error())
 		return
 	}
 
@@ -383,10 +462,20 @@ func (s *Server) handleReadChangelog(w http.ResponseWriter, r *http.Request) {
 	var sinceSeq uint64
 	limit := 100
 	if v := q.Get("since_seq"); v != "" {
-		sinceSeq, _ = strconv.ParseUint(v, 10, 64)
+		n, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "since_seq must be an unsigned integer")
+			return
+		}
+		sinceSeq = n
 	}
 	if v := q.Get("limit"); v != "" {
-		if n, _ := strconv.Atoi(v); n > 0 {
+		n, err := parseNonNegativeInt(v, "limit")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if n > 0 {
 			limit = n
 		}
 	}
@@ -406,17 +495,21 @@ func (s *Server) handleReadChangelog(w http.ResponseWriter, r *http.Request) {
 
 // ── Expand ───────────────────────────────────────────────────────────────────
 
-// POST /api/v1/expand
+// POST /api/v1/t/{tenantID}/expand
 func (s *Server) handleExpand(w http.ResponseWriter, r *http.Request) {
-	tCtx, err := s.tenantCtxFromHeader(r.Context(), r)
+	tCtx, err := s.tenantCtxFromPath(r.Context(), r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, tenantContextErrStatus(err), err.Error())
 		return
 	}
 
 	var req ExpandRequest
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(req.ObjectType) == "" || strings.TrimSpace(req.ObjectID) == "" || strings.TrimSpace(req.Relation) == "" {
+		writeError(w, http.StatusBadRequest, "object_type, object_id, and relation are required")
 		return
 	}
 

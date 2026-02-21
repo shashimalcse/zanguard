@@ -93,7 +93,7 @@ func compilePermission(name string, raw *RawPermission) (*PermissionDef, error) 
 	case len(raw.Union) > 0:
 		pd.Operation = PermOpUnion
 		for _, ref := range raw.Union {
-			pr, err := parsePermissionRef(ref)
+			pr, err := parsePermissionRef(string(ref))
 			if err != nil {
 				return nil, err
 			}
@@ -103,7 +103,7 @@ func compilePermission(name string, raw *RawPermission) (*PermissionDef, error) 
 	case len(raw.Intersect) > 0:
 		pd.Operation = PermOpIntersect
 		for _, ref := range raw.Intersect {
-			pr, err := parsePermissionRef(ref)
+			pr, err := parsePermissionRef(string(ref))
 			if err != nil {
 				return nil, err
 			}
@@ -113,7 +113,7 @@ func compilePermission(name string, raw *RawPermission) (*PermissionDef, error) 
 	case len(raw.Exclusion) > 0:
 		pd.Operation = PermOpExclusion
 		for _, ref := range raw.Exclusion {
-			pr, err := parsePermissionRef(ref)
+			pr, err := parsePermissionRef(string(ref))
 			if err != nil {
 				return nil, err
 			}

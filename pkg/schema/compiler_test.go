@@ -117,6 +117,42 @@ types:
 	}
 }
 
+func TestCompileWithInlineConditionMapItem(t *testing.T) {
+	data := []byte(`
+version: "1.0"
+types:
+  user: {}
+  document:
+    relations:
+      viewer:
+        types: [user]
+    permissions:
+      view:
+        union:
+          - viewer
+          - condition: "object.public == true"
+`)
+	raw, err := Parse(data)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	cs, err := Compile(raw, data)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	perm, err := cs.GetPermission("document", "view")
+	if err != nil {
+		t.Fatalf("GetPermission: %v", err)
+	}
+	if len(perm.Children) != 2 {
+		t.Fatalf("expected 2 children, got %d", len(perm.Children))
+	}
+	if perm.Children[1].Kind() != "condition" {
+		t.Fatalf("expected inline condition child, got %s", perm.Children[1].Kind())
+	}
+}
+
 func TestValidateSchema(t *testing.T) {
 	data := []byte(fullSchema)
 	raw, _ := Parse(data)

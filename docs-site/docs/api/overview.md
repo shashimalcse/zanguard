@@ -41,19 +41,27 @@ The single exception is `PUT /api/v1/tenants/{tenantID}/schema`, which accepts a
 
 ## Tenant identification
 
-Data-plane and runtime endpoints require the caller to identify the target tenant. Pass the tenant ID in the `X-Tenant-ID` request header:
+Tenant identification differs by API surface:
+
+- **Management tenant-scoped endpoints** (`tuples`, `attributes`, `changelog`, `expand`) use a tenant path prefix:
+
+```
+/api/v1/t/{tenantID}/...
+```
+
+- **AuthZen runtime endpoints** (`/access/v1/evaluation`, `/access/v1/evaluations`) require the `X-Tenant-ID` request header:
 
 ```
 X-Tenant-ID: acme
 ```
 
-If the header is missing, the server returns `400 Bad Request` with:
+If the runtime header is missing, the server returns `400 Bad Request` with:
 
 ```json
 {"error": "missing X-Tenant-ID header"}
 ```
 
-Tenant management endpoints (`/api/v1/tenants`) do **not** require this header — the tenant ID is part of the URL path instead.
+Tenant lifecycle and schema endpoints (`/api/v1/tenants/{tenantID}/...`) also use path-based tenant identification and do not require `X-Tenant-ID`.
 
 ## Error format
 
@@ -82,7 +90,7 @@ Schema validation failures include an additional `details` array:
 | `200 OK` | Request succeeded; body contains the result |
 | `201 Created` | Resource was created; body contains the new resource |
 | `204 No Content` | Request succeeded; no body (e.g. DELETE) |
-| `400 Bad Request` | Malformed request, missing required field, or missing header |
+| `400 Bad Request` | Malformed request, missing required field, or missing tenant identifier |
 | `404 Not Found` | Tenant, tuple, or schema does not exist |
 | `405 Method Not Allowed` | Wrong HTTP method for the path |
 | `409 Conflict` | Tuple already exists |

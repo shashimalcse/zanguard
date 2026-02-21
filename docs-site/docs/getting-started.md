@@ -216,12 +216,11 @@ The server listens on `:8080` by default. Override the address with the `ZANGUAR
 ZANGUARD_ADDR=:9090 go run ./cmd/server/main.go
 ```
 
-All data-plane and runtime endpoints require a `X-Tenant-ID` request header that identifies the target tenant. For example, to write a tuple via the API after starting the server and creating a tenant named `acme`:
+Management endpoints that operate on tenant data use path-based tenant scoping (`/api/v1/t/{tenantID}/...`). For example, to write a tuple via the API after starting the server and creating a tenant named `acme`:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/tuples \
+curl -X POST http://localhost:8080/api/v1/t/acme/tuples \
   -H "Content-Type: application/json" \
-  -H "X-Tenant-ID: acme" \
   -d '{
     "object_type": "document",
     "object_id": "readme",
@@ -230,6 +229,8 @@ curl -X POST http://localhost:8080/api/v1/tuples \
     "subject_id": "thilina"
   }'
 ```
+
+AuthZen runtime endpoints remain header-based and require `X-Tenant-ID`.
 
 See the [API Reference](./api/overview) for the full endpoint listing.
 

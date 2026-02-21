@@ -117,7 +117,7 @@ func TestTenantIsolation(t *testing.T) {
 
 	// Write tuple to tenant A
 	_ = s.WriteTuple(ctxA, &model.RelationTuple{
-		ObjectType:  "doc", ObjectID: "1", Relation: "viewer",
+		ObjectType: "doc", ObjectID: "1", Relation: "viewer",
 		SubjectType: "user", SubjectID: "alice",
 	})
 
@@ -206,7 +206,7 @@ func TestDeleteTuple(t *testing.T) {
 	s, ctx := setupStore(t)
 
 	tuple := &model.RelationTuple{
-		ObjectType:  "document", ObjectID: "doc1",
+		ObjectType: "document", ObjectID: "doc1",
 		Relation: "viewer", SubjectType: "user", SubjectID: "bob",
 	}
 	_ = s.WriteTuple(ctx, tuple)
@@ -232,5 +232,69 @@ func TestSuspendedTenantNoWrites(t *testing.T) {
 	})
 	if err != storage.ErrTenantSuspended {
 		t.Errorf("expected ErrTenantSuspended, got %v", err)
+	}
+}
+
+func TestWriteTuplesAtomic(t *testing.T) {
+	s, ctx := setupStore(t)
+
+	// Seed one tuple that will be duplicated in batch.
+	if err := s.WriteTuple(ctx, &model.RelationTuple{
+		ObjectType: "doc", ObjectID: "1", Relation: "viewer", SubjectType: "user", SubjectID: "alice",
+	}); err != nil {
+		t.Fatalf("seed WriteTuple: %v", err)
+	}
+
+	err := s.WriteTuples(ctx, []*model.RelationTuple{
+		{ObjectType: "doc", ObjectID: "2", Relation: "viewer", SubjectType: "user", SubjectID: "bob"},
+		{ObjectType: "doc", ObjectID: "1", Relation: "viewer", SubjectType: "user", SubjectID: "alice"}, // duplicate
+	})
+	if err != storage.ErrDuplicateTuple {
+		t.Fatalf("expected ErrDuplicateTuple, got %v", err)
+	}
+
+	// Atomicity: first tuple in batch must not be persisted.
+	ok, _ := s.CheckDirect(ctx, "doc", "2", "viewer", "user", "bob")
+	if ok {
+		t.Fatal("expected batch write to be atomic; found partially persisted tuple")
+	}
+}
+
+func TestTupleMutationsAppendChangelog(t *testing.T) {
+	s, ctx := setupStore(t)
+
+	tuple := &model.RelationTuple{
+		ObjectType: "doc", ObjectID: "1", Relation: "viewer", SubjectType: "user", SubjectID: "alice",
+	}
+	if err := s.WriteTuple(ctx, tuple); err != nil {
+		t.Fatalf("WriteTuple: %v", err)
+	}
+	if err := s.DeleteTuple(ctx, tuple); err != nil {
+		t.Fatalf("DeleteTuple: %v", err)
+	}
+
+	entries, err := s.ReadChangelog(ctx, 0, 10)
+	if err != nil {
+		t.Fatalf("ReadChangelog: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 changelog entries, got %d", len(entries))
+	}
+	if entries[0].Operation != model.ChangeOpInsert {
+		t.Fatalf("expected first changelog op INSERT, got %s", entries[0].Operation)
+	}
+	if entries[1].Operation != model.ChangeOpDelete {
+		t.Fatalf("expected second changelog op DELETE, got %s", entries[1].Operation)
+	}
+}
+
+func TestGetAttributesNotFound(t *testing.T) {
+	s, ctx := setupStore(t)
+
+	if _, err := s.GetObjectAttributes(ctx, "document", "missing"); err != storage.ErrNotFound {
+		t.Fatalf("expected object attributes ErrNotFound, got %v", err)
+	}
+	if _, err := s.GetSubjectAttributes(ctx, "user", "missing"); err != storage.ErrNotFound {
+		t.Fatalf("expected subject attributes ErrNotFound, got %v", err)
 	}
 }

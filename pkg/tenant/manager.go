@@ -2,6 +2,7 @@ package tenant
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"time"
@@ -9,6 +10,8 @@ import (
 	"zanguard/pkg/model"
 	"zanguard/pkg/storage"
 )
+
+var ErrInvalidStateTransition = errors.New("invalid tenant state transition")
 
 // tenantIDRegexp validates tenant IDs: lowercase alphanumeric + hyphens, 3-128 chars.
 var tenantIDRegexp = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,126}[a-z0-9]$`)
@@ -69,7 +72,7 @@ func (m *Manager) Activate(ctx context.Context, tenantID string) error {
 		return err
 	}
 	if t.Status == model.TenantDeleted {
-		return fmt.Errorf("cannot activate deleted tenant %q", tenantID)
+		return storage.ErrTenantDeleted
 	}
 	t.Status = model.TenantActive
 	return m.store.UpdateTenant(ctx, t)
@@ -82,7 +85,7 @@ func (m *Manager) Suspend(ctx context.Context, tenantID string) error {
 		return err
 	}
 	if t.Status != model.TenantActive {
-		return fmt.Errorf("can only suspend active tenants, current status: %s", t.Status)
+		return fmt.Errorf("%w: can only suspend active tenants, current status: %s", ErrInvalidStateTransition, t.Status)
 	}
 	t.Status = model.TenantSuspended
 	return m.store.UpdateTenant(ctx, t)
@@ -95,7 +98,7 @@ func (m *Manager) Delete(ctx context.Context, tenantID string) error {
 		return err
 	}
 	if t.Status == model.TenantDeleted {
-		return fmt.Errorf("tenant %q is already deleted", tenantID)
+		return storage.ErrTenantDeleted
 	}
 	t.Status = model.TenantDeleted
 	return m.store.UpdateTenant(ctx, t)

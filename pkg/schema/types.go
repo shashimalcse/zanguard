@@ -1,6 +1,8 @@
 package schema
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/expr-lang/expr/vm"
@@ -16,15 +18,38 @@ const (
 	PermOpDirect                  // direct: resolve: <relation> sugar
 )
 
+// PermissionListItem is one child entry in a permission list.
+// It supports either a plain string reference (e.g. "viewer", "parent->view")
+// or an inline map form: {condition: "<expr>"}.
+type PermissionListItem string
+
+func (p *PermissionListItem) UnmarshalYAML(unmarshal func(any) error) error {
+	var s string
+	if err := unmarshal(&s); err == nil {
+		*p = PermissionListItem(strings.TrimSpace(s))
+		return nil
+	}
+
+	var cond struct {
+		Condition string `yaml:"condition"`
+	}
+	if err := unmarshal(&cond); err == nil && strings.TrimSpace(cond.Condition) != "" {
+		*p = PermissionListItem("condition: " + strings.TrimSpace(cond.Condition))
+		return nil
+	}
+
+	return fmt.Errorf("permission list item must be a string ref or {condition: <expr>}")
+}
+
 // RawSchema is the deserialized YAML schema before compilation.
 type RawSchema struct {
-	Version string                `yaml:"version"`
-	Types   map[string]*RawType   `yaml:"types"`
+	Version string              `yaml:"version"`
+	Types   map[string]*RawType `yaml:"types"`
 }
 
 // RawType is a type definition in the raw schema.
 type RawType struct {
-	Attributes  map[string]string     `yaml:"attributes,omitempty"`
+	Attributes  map[string]string         `yaml:"attributes,omitempty"`
 	Relations   map[string]*RawRelation   `yaml:"relations,omitempty"`
 	Permissions map[string]*RawPermission `yaml:"permissions,omitempty"`
 }
@@ -37,18 +62,18 @@ type RawRelation struct {
 // RawPermission is a permission definition in the raw schema.
 // Supports: resolve, union, intersect, exclusion (with optional condition).
 type RawPermission struct {
-	Resolve   string   `yaml:"resolve,omitempty"`
-	Union     []string `yaml:"union,omitempty"`
-	Intersect []string `yaml:"intersect,omitempty"`
-	Exclusion []string `yaml:"exclusion,omitempty"`
-	Condition string   `yaml:"condition,omitempty"`
+	Resolve   string               `yaml:"resolve,omitempty"`
+	Union     []PermissionListItem `yaml:"union,omitempty"`
+	Intersect []PermissionListItem `yaml:"intersect,omitempty"`
+	Exclusion []PermissionListItem `yaml:"exclusion,omitempty"`
+	Condition string               `yaml:"condition,omitempty"`
 }
 
 // CompiledSchema is the compiled, ready-to-use schema for a tenant.
 type CompiledSchema struct {
 	Types      map[string]*TypeDef
 	Version    string
-	Hash       string    // SHA-256 of source YAML for cache invalidation
+	Hash       string // SHA-256 of source YAML for cache invalidation
 	CompiledAt time.Time
 }
 

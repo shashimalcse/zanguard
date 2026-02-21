@@ -8,7 +8,7 @@ sidebar_position: 2
 
 The Management API lives under `/api/v1/` and covers the full operational surface: tenant lifecycle, schema loading, relation-tuple writes, attribute management, the audit changelog, and subject-tree expansion.
 
-All endpoints return `application/json`. Endpoints that operate on tenant data require the `X-Tenant-ID` header (tuples, attributes, changelog, expand). Tenant management endpoints identify the tenant through the URL path instead.
+All endpoints return `application/json`. Tenant-scoped management endpoints use the path prefix `/api/v1/t/{tenantID}/...` (tuples, attributes, changelog, expand). Tenant lifecycle and schema endpoints use `/api/v1/tenants/{tenantID}/...`.
 
 ---
 
@@ -166,7 +166,7 @@ curl http://localhost:8080/api/v1/tenants/acme
 
 **`DELETE /api/v1/tenants/{tenantID}`**
 
-Permanently deletes a tenant. Returns `204 No Content` on success.
+Soft-deletes a tenant by transitioning it to `deleted`. Returns `204 No Content` on success.
 
 ```bash
 curl -X DELETE http://localhost:8080/api/v1/tenants/acme
@@ -389,22 +389,22 @@ curl http://localhost:8080/api/v1/tenants/acme/schema
 
 Relation tuples are the fundamental authorization facts. Each tuple asserts that a subject holds a relation on an object — for example, `user:alice` is a `viewer` of `document:readme`.
 
-All tuple endpoints require the `X-Tenant-ID` header to identify the target tenant.
+All tuple endpoints are tenant-scoped via `/api/v1/t/{tenantID}/...`.
 
 ### Endpoint summary
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/v1/tuples` | Write a single tuple |
-| `POST` | `/api/v1/tuples/batch` | Write multiple tuples atomically |
-| `DELETE` | `/api/v1/tuples` | Delete a single tuple |
-| `GET` | `/api/v1/tuples` | Read tuples with optional filters |
+| `POST` | `/api/v1/t/{tenantID}/tuples` | Write a single tuple |
+| `POST` | `/api/v1/t/{tenantID}/tuples/batch` | Write multiple tuples atomically |
+| `DELETE` | `/api/v1/t/{tenantID}/tuples` | Delete a single tuple |
+| `GET` | `/api/v1/t/{tenantID}/tuples` | Read tuples with optional filters |
 
 ---
 
 ### Write tuple
 
-**`POST /api/v1/tuples`**
+**`POST /api/v1/t/{tenantID}/tuples`**
 
 Writes a single relation tuple for the tenant.
 
@@ -421,9 +421,8 @@ Writes a single relation tuple for the tenant.
 | `attributes` | object | no | Arbitrary key-value metadata attached to the tuple |
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/tuples \
+curl -X POST http://localhost:8080/api/v1/t/acme/tuples \
   -H "Content-Type: application/json" \
-  -H "X-Tenant-ID: acme" \
   -d '{
     "object_type": "document",
     "object_id": "readme",
@@ -443,7 +442,7 @@ curl -X POST http://localhost:8080/api/v1/tuples \
 
 | Status | Condition |
 |--------|-----------|
-| `400` | Missing `X-Tenant-ID`, or malformed request body |
+| `400` | Malformed request body |
 | `403` | Tenant is suspended |
 | `404` | Tenant not found |
 | `409` | Tuple already exists |
@@ -453,7 +452,7 @@ curl -X POST http://localhost:8080/api/v1/tuples \
 
 ### Batch write tuples
 
-**`POST /api/v1/tuples/batch`**
+**`POST /api/v1/t/{tenantID}/tuples/batch`**
 
 Writes multiple tuples in a single request. All tuples are written atomically — either all succeed or none are persisted.
 
@@ -464,9 +463,8 @@ Writes multiple tuples in a single request. All tuples are written atomically �
 | `tuples` | array | yes | Array of tuple objects (same fields as single write) |
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/tuples/batch \
+curl -X POST http://localhost:8080/api/v1/t/acme/tuples/batch \
   -H "Content-Type: application/json" \
-  -H "X-Tenant-ID: acme" \
   -d '{
     "tuples": [
       {
@@ -497,7 +495,7 @@ curl -X POST http://localhost:8080/api/v1/tuples/batch \
 
 | Status | Condition |
 |--------|-----------|
-| `400` | Missing `X-Tenant-ID`, or malformed request body |
+| `400` | Malformed request body |
 | `403` | Tenant is suspended |
 | `404` | Tenant not found |
 | `409` | One or more tuples already exist |
@@ -507,14 +505,13 @@ curl -X POST http://localhost:8080/api/v1/tuples/batch \
 
 ### Delete tuple
 
-**`DELETE /api/v1/tuples`**
+**`DELETE /api/v1/t/{tenantID}/tuples`**
 
 Deletes a single relation tuple. The tuple to delete is identified by the request body.
 
 ```bash
-curl -X DELETE http://localhost:8080/api/v1/tuples \
+curl -X DELETE http://localhost:8080/api/v1/t/acme/tuples \
   -H "Content-Type: application/json" \
-  -H "X-Tenant-ID: acme" \
   -d '{
     "object_type": "document",
     "object_id": "readme",
@@ -532,7 +529,7 @@ No response body.
 
 | Status | Condition |
 |--------|-----------|
-| `400` | Missing `X-Tenant-ID`, or malformed request body |
+| `400` | Malformed request body |
 | `403` | Tenant is suspended |
 | `404` | Tenant not found, or tuple does not exist |
 
@@ -540,7 +537,7 @@ No response body.
 
 ### Read tuples
 
-**`GET /api/v1/tuples`**
+**`GET /api/v1/t/{tenantID}/tuples`**
 
 Reads tuples for the tenant. All query parameters are optional — omitting all parameters returns all tuples for the tenant.
 
@@ -556,8 +553,7 @@ Reads tuples for the tenant. All query parameters are optional — omitting all 
 | `subject_relation` | Filter by subject relation (userset references) |
 
 ```bash
-curl "http://localhost:8080/api/v1/tuples?object_type=document&object_id=readme" \
-  -H "X-Tenant-ID: acme"
+curl "http://localhost:8080/api/v1/t/acme/tuples?object_type=document&object_id=readme"
 ```
 
 #### Response — `200 OK`
@@ -594,7 +590,7 @@ curl "http://localhost:8080/api/v1/tuples?object_type=document&object_id=readme"
 
 | Status | Condition |
 |--------|-----------|
-| `400` | Missing `X-Tenant-ID` |
+| `400` | Invalid request |
 | `404` | Tenant not found |
 
 ---
@@ -603,22 +599,22 @@ curl "http://localhost:8080/api/v1/tuples?object_type=document&object_id=readme"
 
 Attributes store arbitrary key-value metadata on objects and subjects. They are used by ABAC (attribute-based access control) conditions in permission rules.
 
-All attribute endpoints require the `X-Tenant-ID` header.
+All attribute endpoints are tenant-scoped via `/api/v1/t/{tenantID}/...`.
 
 ### Endpoint summary
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `PUT` | `/api/v1/attributes/objects/{type}/{id}` | Set attributes on an object |
-| `GET` | `/api/v1/attributes/objects/{type}/{id}` | Get attributes of an object |
-| `PUT` | `/api/v1/attributes/subjects/{type}/{id}` | Set attributes on a subject |
-| `GET` | `/api/v1/attributes/subjects/{type}/{id}` | Get attributes of a subject |
+| `PUT` | `/api/v1/t/{tenantID}/attributes/objects/{type}/{id}` | Set attributes on an object |
+| `GET` | `/api/v1/t/{tenantID}/attributes/objects/{type}/{id}` | Get attributes of an object |
+| `PUT` | `/api/v1/t/{tenantID}/attributes/subjects/{type}/{id}` | Set attributes on a subject |
+| `GET` | `/api/v1/t/{tenantID}/attributes/subjects/{type}/{id}` | Get attributes of a subject |
 
 ---
 
 ### Set object attributes
 
-**`PUT /api/v1/attributes/objects/{type}/{id}`**
+**`PUT /api/v1/t/{tenantID}/attributes/objects/{type}/{id}`**
 
 Replaces the attributes for the object identified by `{type}` and `{id}`. The provided map fully replaces any previously stored attributes.
 
@@ -637,9 +633,8 @@ Replaces the attributes for the object identified by `{type}` and `{id}`. The pr
 
 ```bash
 curl -X PUT \
-  "http://localhost:8080/api/v1/attributes/objects/document/readme" \
+  "http://localhost:8080/api/v1/t/acme/attributes/objects/document/readme" \
   -H "Content-Type: application/json" \
-  -H "X-Tenant-ID: acme" \
   -d '{
     "attributes": {
       "sensitivity": "confidential",
@@ -663,7 +658,7 @@ curl -X PUT \
 
 | Status | Condition |
 |--------|-----------|
-| `400` | Missing `X-Tenant-ID`, or malformed body |
+| `400` | Malformed request body |
 | `403` | Tenant is suspended |
 | `404` | Tenant not found |
 
@@ -671,13 +666,12 @@ curl -X PUT \
 
 ### Get object attributes
 
-**`GET /api/v1/attributes/objects/{type}/{id}`**
+**`GET /api/v1/t/{tenantID}/attributes/objects/{type}/{id}`**
 
 Returns the attributes stored for the specified object.
 
 ```bash
-curl "http://localhost:8080/api/v1/attributes/objects/document/readme" \
-  -H "X-Tenant-ID: acme"
+curl "http://localhost:8080/api/v1/t/acme/attributes/objects/document/readme"
 ```
 
 #### Response — `200 OK`
@@ -695,14 +689,14 @@ curl "http://localhost:8080/api/v1/attributes/objects/document/readme" \
 
 | Status | Condition |
 |--------|-----------|
-| `400` | Missing `X-Tenant-ID` |
+| `400` | Invalid request |
 | `404` | Tenant not found, or no attributes stored for this object |
 
 ---
 
 ### Set subject attributes
 
-**`PUT /api/v1/attributes/subjects/{type}/{id}`**
+**`PUT /api/v1/t/{tenantID}/attributes/subjects/{type}/{id}`**
 
 Replaces the attributes for the subject identified by `{type}` and `{id}`.
 
@@ -715,9 +709,8 @@ Replaces the attributes for the subject identified by `{type}` and `{id}`.
 
 ```bash
 curl -X PUT \
-  "http://localhost:8080/api/v1/attributes/subjects/user/alice" \
+  "http://localhost:8080/api/v1/t/acme/attributes/subjects/user/alice" \
   -H "Content-Type: application/json" \
-  -H "X-Tenant-ID: acme" \
   -d '{
     "attributes": {
       "clearance_level": 3,
@@ -741,7 +734,7 @@ curl -X PUT \
 
 | Status | Condition |
 |--------|-----------|
-| `400` | Missing `X-Tenant-ID`, or malformed body |
+| `400` | Malformed request body |
 | `403` | Tenant is suspended |
 | `404` | Tenant not found |
 
@@ -749,13 +742,12 @@ curl -X PUT \
 
 ### Get subject attributes
 
-**`GET /api/v1/attributes/subjects/{type}/{id}`**
+**`GET /api/v1/t/{tenantID}/attributes/subjects/{type}/{id}`**
 
 Returns the attributes stored for the specified subject.
 
 ```bash
-curl "http://localhost:8080/api/v1/attributes/subjects/user/alice" \
-  -H "X-Tenant-ID: acme"
+curl "http://localhost:8080/api/v1/t/acme/attributes/subjects/user/alice"
 ```
 
 #### Response — `200 OK`
@@ -773,7 +765,7 @@ curl "http://localhost:8080/api/v1/attributes/subjects/user/alice" \
 
 | Status | Condition |
 |--------|-----------|
-| `400` | Missing `X-Tenant-ID` |
+| `400` | Invalid request |
 | `404` | Tenant not found, or no attributes stored for this subject |
 
 ---
@@ -782,11 +774,11 @@ curl "http://localhost:8080/api/v1/attributes/subjects/user/alice" \
 
 The changelog is an append-only, monotonically sequenced log of every tuple mutation within a tenant. It is suitable for event streaming, audit trails, and cache invalidation.
 
-The changelog endpoint requires the `X-Tenant-ID` header.
+The changelog endpoint is tenant-scoped via `/api/v1/t/{tenantID}/changelog`.
 
 ### Read changelog
 
-**`GET /api/v1/changelog`**
+**`GET /api/v1/t/{tenantID}/changelog`**
 
 Returns changelog entries for the tenant starting after the given sequence number.
 
@@ -798,8 +790,7 @@ Returns changelog entries for the tenant starting after the given sequence numbe
 | `limit` | integer | `100` | Maximum number of entries to return |
 
 ```bash
-curl "http://localhost:8080/api/v1/changelog?since_seq=0&limit=50" \
-  -H "X-Tenant-ID: acme"
+curl "http://localhost:8080/api/v1/t/acme/changelog?since_seq=0&limit=50"
 ```
 
 #### Response — `200 OK`
@@ -851,22 +842,22 @@ Use `latest_sequence` from one response as the `since_seq` value in the next pol
 
 | Status | Condition |
 |--------|-----------|
-| `400` | Missing `X-Tenant-ID` |
+| `400` | Invalid request |
 | `404` | Tenant not found |
 
 ---
 
 ## Expand
 
-The expand endpoint traverses the relation graph and returns a tree of all subjects that hold a given relation on an object. This is useful for debugging permission models and for building UI components that display "who has access."
+The expand endpoint returns the direct subject tree for a given relation on an object. This is useful for debugging permission models and for building UI components that display "who has access."
 
-The expand endpoint requires the `X-Tenant-ID` header.
+The expand endpoint is tenant-scoped via `/api/v1/t/{tenantID}/expand`.
 
 ### Expand relation
 
-**`POST /api/v1/expand`**
+**`POST /api/v1/t/{tenantID}/expand`**
 
-Expands the full subject tree for a given `object_type:object_id#relation`.
+Expands direct subjects for `object_type:object_id#relation`.
 
 #### Request body
 
@@ -877,9 +868,8 @@ Expands the full subject tree for a given `object_type:object_id#relation`.
 | `relation` | string | yes | Relation to expand |
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/expand \
+curl -X POST http://localhost:8080/api/v1/t/acme/expand \
   -H "Content-Type: application/json" \
-  -H "X-Tenant-ID: acme" \
   -d '{
     "object_type": "document",
     "object_id": "readme",
@@ -889,7 +879,7 @@ curl -X POST http://localhost:8080/api/v1/expand \
 
 #### Response — `200 OK`
 
-The response is a recursive subject tree. Each node has a `subject` and an optional `children` array for userset expansions.
+The response contains direct relation subjects. Userset nodes are returned as direct children and are not recursively expanded by this endpoint.
 
 ```json
 {
@@ -912,15 +902,7 @@ The response is a recursive subject tree. Each node has a `subject` and an optio
         "id": "eng",
         "relation": "member"
       },
-      "children": [
-        {
-          "subject": {
-            "type": "user",
-            "id": "bob"
-          },
-          "children": null
-        }
-      ]
+      "children": null
     }
   ]
 }
@@ -930,6 +912,6 @@ The response is a recursive subject tree. Each node has a `subject` and an optio
 
 | Status | Condition |
 |--------|-----------|
-| `400` | Missing `X-Tenant-ID`, or malformed request body |
+| `400` | Malformed request body |
 | `404` | Tenant not found |
 | `500` | Engine error during expansion |
