@@ -1,11 +1,13 @@
 "use client";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { FileCode, Building2 } from "lucide-react";
+import { FileCode, Building2, FlaskConical } from "lucide-react";
 import { useSchema } from "@/lib/hooks/use-schema";
 import { useTenantStore } from "@/lib/stores/tenant-store";
 import { SchemaEditor } from "@/components/schema/schema-editor";
+import { SchemaGraph } from "@/components/schema/schema-graph";
 import { SchemaViewer } from "@/components/schema/schema-viewer";
+import { SchemaEvaluator } from "@/components/schema/schema-evaluator";
 import { SchemaMeta } from "@/components/schema/schema-meta";
 import { EmptyState } from "@/components/shared/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -58,6 +60,13 @@ export default function SchemaPage() {
           <TabsTrigger value="visual" disabled={!hasSchema}>
             Visual
           </TabsTrigger>
+          <TabsTrigger value="graph" disabled={!hasSchema}>
+            Graph
+          </TabsTrigger>
+          <TabsTrigger value="evaluate" disabled={!hasSchema}>
+            <FlaskConical className="mr-2 h-4 w-4" />
+            Evaluate
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="editor" className="mt-4">
@@ -75,6 +84,30 @@ export default function SchemaPage() {
               icon={FileCode}
               title="No schema loaded"
               description="Load a schema using the Editor tab to see the visual representation."
+            />
+          )}
+        </TabsContent>
+
+        <TabsContent value="graph" className="mt-4">
+          {hasSchema ? (
+            <SchemaGraph source={schema.source} />
+          ) : (
+            <EmptyState
+              icon={FileCode}
+              title="No schema loaded"
+              description="Load a schema using the Editor tab to see the visual representation."
+            />
+          )}
+        </TabsContent>
+
+        <TabsContent value="evaluate" className="mt-4">
+          {hasSchema ? (
+            <SchemaEvaluator tenantId={selectedTenantId} source={schema.source} />
+          ) : (
+            <EmptyState
+              icon={FlaskConical}
+              title="No schema loaded"
+              description="Load a schema using the Editor tab to test authorization checks."
             />
           )}
         </TabsContent>
