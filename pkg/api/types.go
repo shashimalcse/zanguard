@@ -60,6 +60,16 @@ type AttributesResponse struct {
 	Attributes map[string]any `json:"attributes"`
 }
 
+type ListObjectAttributesResponse struct {
+	Objects []*model.ObjectAttributes `json:"objects"`
+	Count   int                       `json:"count"`
+}
+
+type ListSubjectAttributesResponse struct {
+	Subjects []*model.SubjectAttributes `json:"subjects"`
+	Count    int                        `json:"count"`
+}
+
 // ── Changelog ────────────────────────────────────────────────────────────────
 
 type ChangelogResponse struct {

@@ -1,5 +1,31 @@
 import { apiClient } from "./client";
-import type { AttributesResponse } from "./types";
+import type {
+  AttributesResponse,
+  ListObjectAttributesResponse,
+  ListSubjectAttributesResponse,
+} from "./types";
+
+export async function listObjectAttributes(
+  tenantId: string,
+  objectType?: string
+): Promise<ListObjectAttributesResponse> {
+  const searchParams: Record<string, string> = {};
+  if (objectType) searchParams.type = objectType;
+  return apiClient
+    .get(`api/v1/t/${tenantId}/attributes/objects`, { searchParams })
+    .json();
+}
+
+export async function listSubjectAttributes(
+  tenantId: string,
+  subjectType?: string
+): Promise<ListSubjectAttributesResponse> {
+  const searchParams: Record<string, string> = {};
+  if (subjectType) searchParams.type = subjectType;
+  return apiClient
+    .get(`api/v1/t/${tenantId}/attributes/subjects`, { searchParams })
+    .json();
+}
 
 export async function getObjectAttributes(
   tenantId: string,

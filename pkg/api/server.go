@@ -70,8 +70,10 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/v1/t/{tenantID}/tuples", s.handleReadTuples)
 
 	// ── Management: Attributes ───────────────────────────────────────────────
+	s.mux.HandleFunc("GET /api/v1/t/{tenantID}/attributes/objects", s.handleListObjectAttributes)
 	s.mux.HandleFunc("GET /api/v1/t/{tenantID}/attributes/objects/{type}/{id}", s.handleGetObjectAttributes)
 	s.mux.HandleFunc("PUT /api/v1/t/{tenantID}/attributes/objects/{type}/{id}", s.handleSetObjectAttributes)
+	s.mux.HandleFunc("GET /api/v1/t/{tenantID}/attributes/subjects", s.handleListSubjectAttributes)
 	s.mux.HandleFunc("GET /api/v1/t/{tenantID}/attributes/subjects/{type}/{id}", s.handleGetSubjectAttributes)
 	s.mux.HandleFunc("PUT /api/v1/t/{tenantID}/attributes/subjects/{type}/{id}", s.handleSetSubjectAttributes)
 

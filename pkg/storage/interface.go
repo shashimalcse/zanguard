@@ -47,8 +47,10 @@ type TupleStore interface {
 	// Attributes (tenant-scoped)
 	GetObjectAttributes(ctx context.Context, objectType, objectID string) (map[string]any, error)
 	SetObjectAttributes(ctx context.Context, objectType, objectID string, attrs map[string]any) error
+	ListObjectAttributes(ctx context.Context, objectType string) ([]*model.ObjectAttributes, error)
 	GetSubjectAttributes(ctx context.Context, subjectType, subjectID string) (map[string]any, error)
 	SetSubjectAttributes(ctx context.Context, subjectType, subjectID string, attrs map[string]any) error
+	ListSubjectAttributes(ctx context.Context, subjectType string) ([]*model.SubjectAttributes, error)
 
 	// Changelog (tenant-scoped)
 	AppendChangelog(ctx context.Context, entry *model.ChangelogEntry) error

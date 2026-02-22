@@ -452,6 +452,46 @@ func (s *Server) handleSetSubjectAttributes(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, AttributesResponse{Attributes: req.Attributes})
 }
 
+// GET /api/v1/t/{tenantID}/attributes/objects?type=
+func (s *Server) handleListObjectAttributes(w http.ResponseWriter, r *http.Request) {
+	tCtx, err := s.tenantCtxFromPath(r.Context(), r)
+	if err != nil {
+		writeError(w, tenantContextErrStatus(err), err.Error())
+		return
+	}
+
+	objectType := r.URL.Query().Get("type")
+	objects, err := s.store.ListObjectAttributes(tCtx, objectType)
+	if err != nil {
+		writeError(w, errStatus(err), err.Error())
+		return
+	}
+	if objects == nil {
+		objects = []*model.ObjectAttributes{}
+	}
+	writeJSON(w, http.StatusOK, ListObjectAttributesResponse{Objects: objects, Count: len(objects)})
+}
+
+// GET /api/v1/t/{tenantID}/attributes/subjects?type=
+func (s *Server) handleListSubjectAttributes(w http.ResponseWriter, r *http.Request) {
+	tCtx, err := s.tenantCtxFromPath(r.Context(), r)
+	if err != nil {
+		writeError(w, tenantContextErrStatus(err), err.Error())
+		return
+	}
+
+	subjectType := r.URL.Query().Get("type")
+	subjects, err := s.store.ListSubjectAttributes(tCtx, subjectType)
+	if err != nil {
+		writeError(w, errStatus(err), err.Error())
+		return
+	}
+	if subjects == nil {
+		subjects = []*model.SubjectAttributes{}
+	}
+	writeJSON(w, http.StatusOK, ListSubjectAttributesResponse{Subjects: subjects, Count: len(subjects)})
+}
+
 // GET /api/v1/t/{tenantID}/attributes/subjects/{type}/{id}
 func (s *Server) handleGetSubjectAttributes(w http.ResponseWriter, r *http.Request) {
 	tCtx, err := s.tenantCtxFromPath(r.Context(), r)

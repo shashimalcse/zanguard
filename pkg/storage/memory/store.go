@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -389,6 +390,40 @@ func (s *Store) SetObjectAttributes(ctx context.Context, objectType, objectID st
 	return nil
 }
 
+func (s *Store) ListObjectAttributes(ctx context.Context, objectType string) ([]*model.ObjectAttributes, error) {
+	tenantID, err := tenantIDFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if err := s.checkTenantReadable(tenantID); err != nil {
+		return nil, err
+	}
+
+	var result []*model.ObjectAttributes
+	for key, attrs := range s.objAttrs[tenantID] {
+		idx := strings.Index(key, ":")
+		if idx < 0 {
+			continue
+		}
+		objType := key[:idx]
+		objID := key[idx+1:]
+		if objectType != "" && objType != objectType {
+			continue
+		}
+		result = append(result, &model.ObjectAttributes{
+			TenantID:   tenantID,
+			ObjectType: objType,
+			ObjectID:   objID,
+			Attributes: copyMap(attrs),
+		})
+	}
+	return result, nil
+}
+
 func (s *Store) GetSubjectAttributes(ctx context.Context, subjectType, subjectID string) (map[string]any, error) {
 	tenantID, err := tenantIDFromCtx(ctx)
 	if err != nil {
@@ -425,6 +460,40 @@ func (s *Store) SetSubjectAttributes(ctx context.Context, subjectType, subjectID
 	key := subjectType + ":" + subjectID
 	s.subAttrs[tenantID][key] = copyMap(attrs)
 	return nil
+}
+
+func (s *Store) ListSubjectAttributes(ctx context.Context, subjectType string) ([]*model.SubjectAttributes, error) {
+	tenantID, err := tenantIDFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if err := s.checkTenantReadable(tenantID); err != nil {
+		return nil, err
+	}
+
+	var result []*model.SubjectAttributes
+	for key, attrs := range s.subAttrs[tenantID] {
+		idx := strings.Index(key, ":")
+		if idx < 0 {
+			continue
+		}
+		subType := key[:idx]
+		subID := key[idx+1:]
+		if subjectType != "" && subType != subjectType {
+			continue
+		}
+		result = append(result, &model.SubjectAttributes{
+			TenantID:    tenantID,
+			SubjectType: subType,
+			SubjectID:   subID,
+			Attributes:  copyMap(attrs),
+		})
+	}
+	return result, nil
 }
 
 // -- Changelog --
