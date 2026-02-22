@@ -699,6 +699,112 @@ func (s *Store) SetObjectAttributes(ctx context.Context, objectType, objectID st
 	return err
 }
 
+func (s *Store) ListObjectAttributes(ctx context.Context, objectType string) ([]*model.ObjectAttributes, error) {
+	tenantID, err := tenantIDFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureTenantReadable(ctx, tenantID); err != nil {
+		return nil, err
+	}
+
+	var rows pgx.Rows
+	if objectType != "" {
+		rows, err = s.pool.Query(ctx, `
+			SELECT object_type, object_id, attributes, updated_at
+			FROM object_attributes
+			WHERE tenant_id=$1 AND object_type=$2
+			ORDER BY object_type, object_id`,
+			tenantID, objectType)
+	} else {
+		rows, err = s.pool.Query(ctx, `
+			SELECT object_type, object_id, attributes, updated_at
+			FROM object_attributes
+			WHERE tenant_id=$1
+			ORDER BY object_type, object_id`,
+			tenantID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []*model.ObjectAttributes
+	for rows.Next() {
+		var objType, objID string
+		var attrsJSON []byte
+		var updatedAt time.Time
+		if err := rows.Scan(&objType, &objID, &attrsJSON, &updatedAt); err != nil {
+			return nil, err
+		}
+		var attrs map[string]any
+		if err := json.Unmarshal(attrsJSON, &attrs); err != nil {
+			return nil, err
+		}
+		result = append(result, &model.ObjectAttributes{
+			TenantID:   tenantID,
+			ObjectType: objType,
+			ObjectID:   objID,
+			Attributes: attrs,
+			UpdatedAt:  updatedAt,
+		})
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) ListSubjectAttributes(ctx context.Context, subjectType string) ([]*model.SubjectAttributes, error) {
+	tenantID, err := tenantIDFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureTenantReadable(ctx, tenantID); err != nil {
+		return nil, err
+	}
+
+	var rows pgx.Rows
+	if subjectType != "" {
+		rows, err = s.pool.Query(ctx, `
+			SELECT subject_type, subject_id, attributes, updated_at
+			FROM subject_attributes
+			WHERE tenant_id=$1 AND subject_type=$2
+			ORDER BY subject_type, subject_id`,
+			tenantID, subjectType)
+	} else {
+		rows, err = s.pool.Query(ctx, `
+			SELECT subject_type, subject_id, attributes, updated_at
+			FROM subject_attributes
+			WHERE tenant_id=$1
+			ORDER BY subject_type, subject_id`,
+			tenantID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []*model.SubjectAttributes
+	for rows.Next() {
+		var subType, subID string
+		var attrsJSON []byte
+		var updatedAt time.Time
+		if err := rows.Scan(&subType, &subID, &attrsJSON, &updatedAt); err != nil {
+			return nil, err
+		}
+		var attrs map[string]any
+		if err := json.Unmarshal(attrsJSON, &attrs); err != nil {
+			return nil, err
+		}
+		result = append(result, &model.SubjectAttributes{
+			TenantID:    tenantID,
+			SubjectType: subType,
+			SubjectID:   subID,
+			Attributes:  attrs,
+			UpdatedAt:   updatedAt,
+		})
+	}
+	return result, rows.Err()
+}
+
 func (s *Store) GetSubjectAttributes(ctx context.Context, subjectType, subjectID string) (map[string]any, error) {
 	tenantID, err := tenantIDFromCtx(ctx)
 	if err != nil {

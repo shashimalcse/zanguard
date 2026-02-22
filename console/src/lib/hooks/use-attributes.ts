@@ -5,11 +5,39 @@ import * as attributesApi from "../api/attributes";
 
 export const attributeKeys = {
   all: ["attributes"] as const,
+  objectList: (tenantId: string, type?: string) =>
+    [...attributeKeys.all, "objectList", tenantId, type ?? ""] as const,
+  subjectList: (tenantId: string, type?: string) =>
+    [...attributeKeys.all, "subjectList", tenantId, type ?? ""] as const,
   object: (tenantId: string, type: string, id: string) =>
     [...attributeKeys.all, "object", tenantId, type, id] as const,
   subject: (tenantId: string, type: string, id: string) =>
     [...attributeKeys.all, "subject", tenantId, type, id] as const,
 };
+
+export function useListObjectAttributes(
+  tenantId: string | null,
+  objectType?: string
+) {
+  return useQuery({
+    queryKey: attributeKeys.objectList(tenantId ?? "", objectType),
+    queryFn: () =>
+      attributesApi.listObjectAttributes(tenantId!, objectType),
+    enabled: !!tenantId,
+  });
+}
+
+export function useListSubjectAttributes(
+  tenantId: string | null,
+  subjectType?: string
+) {
+  return useQuery({
+    queryKey: attributeKeys.subjectList(tenantId ?? "", subjectType),
+    queryFn: () =>
+      attributesApi.listSubjectAttributes(tenantId!, subjectType),
+    enabled: !!tenantId,
+  });
+}
 
 export function useObjectAttributes(
   tenantId: string | null,
@@ -57,6 +85,9 @@ export function useSaveObjectAttributes(
       queryClient.invalidateQueries({
         queryKey: attributeKeys.object(tenantId, objectType, objectId),
       });
+      queryClient.invalidateQueries({
+        queryKey: attributeKeys.objectList(tenantId),
+      });
     },
   });
 }
@@ -78,6 +109,9 @@ export function useSaveSubjectAttributes(
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: attributeKeys.subject(tenantId, subjectType, subjectId),
+      });
+      queryClient.invalidateQueries({
+        queryKey: attributeKeys.subjectList(tenantId),
       });
     },
   });

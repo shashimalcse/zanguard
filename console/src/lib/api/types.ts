@@ -127,6 +127,32 @@ export interface AttributesResponse {
   attributes: Record<string, unknown>;
 }
 
+export interface ObjectAttributesItem {
+  tenant_id: string;
+  object_type: string;
+  object_id: string;
+  attributes: Record<string, unknown>;
+  updated_at: string;
+}
+
+export interface SubjectAttributesItem {
+  tenant_id: string;
+  subject_type: string;
+  subject_id: string;
+  attributes: Record<string, unknown>;
+  updated_at: string;
+}
+
+export interface ListObjectAttributesResponse {
+  objects: ObjectAttributesItem[];
+  count: number;
+}
+
+export interface ListSubjectAttributesResponse {
+  subjects: SubjectAttributesItem[];
+  count: number;
+}
+
 export interface SchemaValidationError {
   error: string;
   details: string[];
