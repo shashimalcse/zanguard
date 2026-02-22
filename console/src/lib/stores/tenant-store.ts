@@ -13,7 +13,7 @@ interface TenantStore {
 export const useTenantStore = create<TenantStore>()(
   persist(
     (set) => ({
-      selectedTenantId: null,
+      selectedTenantId: "super",
       setSelectedTenantId: (id) => set({ selectedTenantId: id }),
       sidebarCollapsed: false,
       toggleSidebar: () =>

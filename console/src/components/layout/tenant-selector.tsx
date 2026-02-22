@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Check, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -26,8 +26,21 @@ export function TenantSelector() {
   const { selectedTenantId, setSelectedTenantId } = useTenantStore();
   const { data, isLoading } = useTenants();
 
-  const tenants = data?.tenants ?? [];
+  const tenants = useMemo(() => data?.tenants ?? [], [data?.tenants]);
   const selected = tenants.find((t) => t.id === selectedTenantId);
+
+  useEffect(() => {
+    if (isLoading || tenants.length === 0) return;
+    if (!selectedTenantId) {
+      const superTenant = tenants.find((t) => t.id === "super");
+      setSelectedTenantId(superTenant?.id ?? tenants[0].id);
+      return;
+    }
+    if (!selected) {
+      const superTenant = tenants.find((t) => t.id === "super");
+      setSelectedTenantId(superTenant?.id ?? tenants[0].id);
+    }
+  }, [isLoading, selected, selectedTenantId, setSelectedTenantId, tenants]);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -67,9 +80,7 @@ export function TenantSelector() {
                   key={tenant.id}
                   value={tenant.id}
                   onSelect={(value) => {
-                    setSelectedTenantId(
-                      value === selectedTenantId ? null : value
-                    );
+                    setSelectedTenantId(value);
                     setOpen(false);
                   }}
                 >

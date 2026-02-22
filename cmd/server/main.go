@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"strconv"
@@ -9,9 +11,13 @@ import (
 
 	"zanguard/pkg/api"
 	"zanguard/pkg/engine"
+	"zanguard/pkg/model"
+	"zanguard/pkg/storage"
 	"zanguard/pkg/storage/postgres"
 	"zanguard/pkg/tenant"
 )
+
+const bootstrapTenantID = "super"
 
 func main() {
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
@@ -50,6 +56,11 @@ func main() {
 	defer store.Close()
 
 	mgr := tenant.NewManager(store)
+	if err := ensureBootstrapTenant(ctx, store, mgr, log); err != nil {
+		log.Error("failed to ensure bootstrap tenant", "tenant_id", bootstrapTenantID, "err", err)
+		os.Exit(1)
+	}
+
 	eng := engine.New(store, engine.DefaultConfig())
 
 	srv := api.NewServer(store, eng, mgr, log)
@@ -58,4 +69,33 @@ func main() {
 		log.Error("server error", "err", err)
 		os.Exit(1)
 	}
+}
+
+func ensureBootstrapTenant(ctx context.Context, store storage.TupleStore, mgr *tenant.Manager, log *slog.Logger) error {
+	t, err := mgr.Get(ctx, bootstrapTenantID)
+	if err != nil {
+		if errors.Is(err, storage.ErrTenantNotFound) {
+			if _, err := mgr.Create(ctx, bootstrapTenantID, "Super Tenant", model.SchemaOwn); err != nil {
+				return fmt.Errorf("create bootstrap tenant: %w", err)
+			}
+			if err := mgr.Activate(ctx, bootstrapTenantID); err != nil {
+				return fmt.Errorf("activate bootstrap tenant: %w", err)
+			}
+			log.Info("bootstrap tenant created and activated", "tenant_id", bootstrapTenantID)
+			return nil
+		}
+		return fmt.Errorf("get bootstrap tenant: %w", err)
+	}
+
+	if t.Status == model.TenantActive {
+		return nil
+	}
+
+	prevStatus := t.Status
+	t.Status = model.TenantActive
+	if err := store.UpdateTenant(ctx, t); err != nil {
+		return fmt.Errorf("set bootstrap tenant active from %s: %w", prevStatus, err)
+	}
+	log.Info("bootstrap tenant set active", "tenant_id", bootstrapTenantID, "previous_status", string(prevStatus))
+	return nil
 }
