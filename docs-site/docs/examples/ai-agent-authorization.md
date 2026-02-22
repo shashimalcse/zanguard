@@ -137,8 +137,7 @@ curl -X POST $BASE/api/v1/t/$TENANT/tuples \
     "relation":"executor",
     "subject_type":"agent",
     "subject_id":"temp-agent",
-    "ttl_seconds":300,
-    "attributes":{"consent_id":"consent-2026-0001","approved_by":"user:alice"}
+    "ttl_seconds":300
   }'
 ```
 
